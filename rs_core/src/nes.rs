@@ -1,0 +1,114 @@
+#[cfg(debug_assertions)]
+use crate::cpu::{CpuObserver, CpuSnapshot};
+use crate::{bus::Bus, cart::Cartridge, cpu::Cpu};
+use pyo3::exceptions::PyIOError;
+use pyo3::prelude::*;
+use std::path::{Path, PathBuf};
+
+trait Clock {}
+
+struct NesClock {}
+
+impl Clock for NesClock {}
+
+struct PalClock {}
+
+impl Clock for PalClock {}
+
+#[pyo3::pyclass(unsendable)]
+pub struct Nes {
+    bus: Bus,
+    cpu: Cpu,
+}
+
+#[pyo3::pymethods]
+impl Nes {
+    #[new]
+    pub fn new() -> Self {
+        let mut nes = Nes {
+            bus: Bus::new(),
+            cpu: Cpu::new(),
+        };
+
+        #[cfg(debug_assertions)]
+        nes.cpu.register_observer(Box::new(CpuLogger::new()));
+
+        nes
+    }
+
+    fn load(&mut self, path: PathBuf) -> PyResult<()> {
+        self.load_cart(&path)
+            .map_err(|e| PyIOError::new_err(e.to_string()))
+    }
+
+    pub fn step(&mut self) {
+        self.cpu.step(&mut self.bus);
+    }
+
+    pub fn fetch_test_result(&self) {
+        println!("nestest result: $0002={:02X}", self.bus.read(0x0002),);
+    }
+}
+
+impl Nes {
+    pub fn load_cart<P: AsRef<Path>>(&mut self, path: P) -> std::io::Result<()> {
+        let rom = std::fs::read(path)?;
+        let cart = Cartridge::from_bytes(&rom)?;
+        self.bus.insert_cart(cart);
+        Ok(())
+    }
+}
+
+#[cfg(debug_assertions)]
+#[derive(Clone)]
+pub struct CpuLogger {
+    snapshots: Vec<CpuSnapshot>,
+    cycles_taken: u64,
+}
+
+#[cfg(debug_assertions)]
+impl CpuLogger {
+    pub fn new() -> Self {
+        CpuLogger {
+            snapshots: Vec::new(),
+            cycles_taken: 0,
+        }
+    }
+    pub fn log(&self, snap: &CpuSnapshot) {
+        let bytes_str = match snap.opcode_bytes.len() {
+            1 => format!("{:02X}      ", snap.opcode_bytes[0]),
+            2 => format!(
+                "{:02X} {:02X}   ",
+                snap.opcode_bytes[0], snap.opcode_bytes[1]
+            ),
+            3 => format!(
+                "{:02X} {:02X} {:02X}",
+                snap.opcode_bytes[0], snap.opcode_bytes[1], snap.opcode_bytes[2]
+            ),
+            _ => format!("{:02X}      ", snap.opcode_bytes[0]),
+        };
+
+        let line = format!(
+            "{:04X}  {}  {}  A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X} CYC:{}",
+            snap.pc,
+            bytes_str,
+            snap.current_op,
+            snap.a,
+            snap.x,
+            snap.y,
+            snap.status.bits(),
+            snap.sp,
+            snap.cycles_taken,
+        );
+        println!("{}", line);
+    }
+}
+
+#[cfg(debug_assertions)]
+impl CpuObserver for CpuLogger {
+    fn update(&mut self, snap: CpuSnapshot) {
+        self.cycles_taken += snap.cycles_taken as u64;
+
+        self.log(&snap);
+    }
+}
