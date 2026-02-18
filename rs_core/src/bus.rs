@@ -1,4 +1,4 @@
-use crate::cart::Cartridge;
+use crate::{apu::Apu, cart::Cartridge, ppu::Ppu};
 
 use thiserror::Error;
 
@@ -13,6 +13,8 @@ pub enum BusError {
 pub struct Bus {
     ram: [u8; 2048],
     cart: Option<Cartridge>,
+    ppu: Ppu,
+    apu: Apu,
 }
 
 impl Bus {
@@ -20,26 +22,36 @@ impl Bus {
         Bus {
             ram: [0; 2048],
             cart: None,
+            ppu: Ppu::new(),
+            apu: Apu {},
         }
     }
 
     pub fn insert_cart(&mut self, cart: Cartridge) {
+        self.ppu.load_patterns(cart.get_ppu_data());
         self.cart = Some(cart);
     }
 
     pub fn write_byte(&mut self, addr: u16, data: u8) {
-        self.ram[addr as usize % 2048] = data;
+        match addr {
+            0x0000..=0x1FFF => self.ram[addr as usize % 2048] = data, // RAM
+            0x2000..=0x3FFF => self.ppu.write(addr),                  // PPU-REG
+            0x4000..=0x401F => self.apu.write(addr),                  // APU
+            0x4020..=0xFFFF => match &mut self.cart {
+                Some(cart) => cart.write(addr as usize, data),
+                None => panic!("No cart"),
+            },
+        }
     }
 
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
-            0x0000..0x2000 => self.ram[addr as usize % 2048], // RAM
-            0x2000..0x4000 => 0x0,                            // PPU
-            0x4000..0x4018 => 0x0,                            // APU/I/O
-            0x4018..0x4020 => 0x0,                            // CPU TEST MODE
-            0x4020..0x8000 => 0x0,                            //UNMAPPED
-            0x8000..=0xFFFF => match &self.cart {
-                Some(cart) => cart.read_prg(addr as usize),
+            0x0000..=0x1FFF => self.ram[addr as usize % 2048], // RAM
+            0x2000..=0x3FFF => self.ppu.read(addr),            // PPU-REG
+            0x4000..=0x401F => self.apu.read(addr),            // APU
+            0x4020..=0xFFFF => match &self.cart {
+                // CART ADDRESSES
+                Some(cart) => cart.read_mem(addr as usize),
                 None => panic!("No cart"),
             },
             _ => panic!("Unsupported address: {}", addr),

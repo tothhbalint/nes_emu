@@ -45,8 +45,117 @@ impl Nes {
         self.cpu.step(&mut self.bus);
     }
 
+    pub fn run_test(&mut self) {
+        // List of test ROMs in order
+
+        let tests = [
+            "instr_test-v5/01-basics.nes",
+            "instr_test-v5/02-implied.nes",
+            "instr_test-v5/03-immediate.nes",
+            "instr_test-v5/04-zero_page.nes",
+            "instr_test-v5/05-zp_xy.nes",
+            "instr_test-v5/06-absolute.nes",
+            "instr_test-v5/07-abs_xy.nes",
+            "instr_test-v5/08-ind_x.nes",
+            "instr_test-v5/09-ind_y.nes",
+            "instr_test-v5/10-branches.nes",
+            "instr_test-v5/11-stack.nes",
+            "instr_test-v5/12-jmp_jsr.nes",
+            "instr_test-v5/13-rts.nes",
+            "instr_test-v5/14-rti.nes",
+            "instr_test-v5/15-brk.nes",
+            "instr_test-v5/16-special.nes",
+        ];
+
+        for test_file in tests.iter() {
+            self.cpu = Cpu::new();
+            self.bus = Bus::new();
+
+            //self.cpu.register_observer(Box::new(CpuLogger::new()));
+            println!("=== Running test: {} ===", test_file);
+
+            // Load the test cartridge
+            let res = self.load_cart(test_file);
+            match res {
+                Ok(_) => println!("Loaded cartridge successfully"),
+                Err(err) => {
+                    eprintln!("Error loading cartridge {}: {}", test_file, err);
+                    continue; // skip this test
+                }
+            }
+
+            // Reset CPU and start test
+            self.cpu.reset(&mut self.bus);
+
+            let mut started = false;
+
+            loop {
+                if self.cpu.is_unoff() {
+                    println!("Reached unoffical");
+                    break;
+                }
+                self.step();
+
+                // Read test status from $6000
+                let status = self.bus.read(0x6000);
+
+                match status {
+                    0x80 if !started => {
+                        // Test has just started
+                        started = true;
+                        println!("Test {} started", test_file);
+                    }
+                    0x81 => {
+                        // Special case: CPU reset
+                        println!("Resetting CPU for {}", test_file);
+                        self.cpu.reset(&mut self.bus);
+                    }
+                    0x00..=0x7F => {
+                        // Test may have finished, check started or PC separately
+                        if started || self.cpu.pc == 0xFFFE {
+                            println!("Finished test {} with value: {}", test_file, status);
+                            break;
+                        }
+                    }
+                    _ => {
+                        if self.cpu.pc == 0xFFFE {
+                            println!("Finished test {} with value: {}", test_file, status);
+                            break;
+                        }
+                        // Test is running but no special action
+                        // Optionally, you could log status for debugging
+                        // println!("Running... status: {}", status);
+                    }
+                }
+                let de = self.bus.read(0x6001);
+                let b0 = self.bus.read(0x6002);
+                // Optionally fetch null-terminated test result string at $6004+
+            }
+
+            // Optionally fetch null-terminated test result string at $6004+
+            self.fetch_test_result();
+            println!("----------------------------------------");
+        }
+    }
+
     pub fn fetch_test_result(&self) {
-        println!("nestest result: $0002={:02X}", self.bus.read(0x0002),);
+        let mut addr: u16 = 0x6004;
+        let mut data: Vec<u8> = Vec::new();
+
+        loop {
+            let byte = self.bus.read(addr);
+            if byte == 0x00 {
+                break;
+            }
+            data.push(byte);
+            addr = addr.wrapping_add(1);
+        }
+
+        // Convert to string if it's ASCII
+        if let Ok(text) = std::str::from_utf8(&data) {
+            println!("Read string: {}", text);
+        } else {
+        }
     }
 }
 

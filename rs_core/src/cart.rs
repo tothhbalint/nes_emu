@@ -6,7 +6,7 @@ const CHR_UNIT: usize = 8 * 1024;
 pub struct Cartridge {
     // CPU DATA
     prg_rom: Vec<u8>,
-    cart_ram: Vec<u8>,
+    chr_rom: Vec<u8>,
 }
 
 fn parse_header(bytes: &Vec<u8>) -> std::io::Result<[u8; 16]> {
@@ -33,6 +33,9 @@ impl Cartridge {
         let prg_rom_size = header[4] as usize * PRG_UNIT;
         let chr_rom_size = header[5] as usize * CHR_UNIT;
 
+        println!("{}", header[4]);
+        println!("{}", header[5]);
+
         let trainer_present = header[6] & 0b100 != 0;
         let mut offset = 16;
         if trainer_present {
@@ -48,18 +51,18 @@ impl Cartridge {
 
         offset += prg_rom_size;
 
-        let cart_ram = bytes
+        let chr_rom = bytes
             .get(offset..offset + chr_rom_size)
             .ok_or_else(|| {
                 std::io::Error::new(io::ErrorKind::UnexpectedEof, "Rom too small for CHR size")
             })?
             .to_vec();
 
-        Ok(Cartridge { prg_rom, cart_ram })
+        Ok(Cartridge { prg_rom, chr_rom })
     }
 
-    pub fn read_prg(&self, addr: usize) -> u8 {
-        assert!(addr >= 0x8000, "Address below PRG ROM mapping");
+    pub fn read_mem(&self, addr: usize) -> u8 {
+        //assert!(addr >= 0x8000, "Address below PRG ROM mapping");
 
         let mut idx = addr % self.prg_rom.len();
         if self.prg_rom.len() == PRG_UNIT {
@@ -68,22 +71,19 @@ impl Cartridge {
 
         self.prg_rom[idx]
     }
-    /// Dumps a range of CPU addresses mapped to PRG ROM
-    /// start_addr and end_addr are CPU addresses (0x8000..0xFFFF)
-    pub fn dump_prg_range(&self, start_addr: u16, end_addr: u16) {
-        assert!(start_addr >= 0x8000 && end_addr <= 0xFFFF);
-        let prg_len = self.prg_rom.len();
 
-        for addr in start_addr..=end_addr {
-            let mut idx = (addr - 0x8000) as usize;
+    pub fn write(&mut self, addr: usize, data: u8) {
+        //assert!(addr >= 0x8000, "Address below PRG ROM mapping");
 
-            // Mirror 16 KB PRG ROM if necessary
-            if prg_len == 16 * 1024 && idx >= 16 * 1024 {
-                idx %= 16 * 1024;
-            }
-
-            // Print address and byte
-            println!("{:04X}: {:02X}", addr, self.prg_rom[idx]);
+        let mut idx = addr % self.prg_rom.len();
+        if self.prg_rom.len() == PRG_UNIT {
+            idx = idx % PRG_UNIT;
         }
+
+        self.prg_rom[idx] = data;
+    }
+
+    pub fn get_ppu_data(&self) -> Vec<u8> {
+        self.chr_rom.clone()
     }
 }

@@ -31,7 +31,7 @@ pub struct Cpu {
     a: u8,
     x: u8,
     y: u8,
-    pc: u16,
+    pub pc: u16,
     sp: u8,
     status: Status,
     //Timing
@@ -39,6 +39,7 @@ pub struct Cpu {
     cycles: u64,
     #[cfg(debug_assertions)]
     observers: Vec<Box<dyn CpuObserver>>,
+    unof: bool,
 }
 
 impl Cpu {
@@ -47,15 +48,22 @@ impl Cpu {
             a: 0,
             x: 0,
             y: 0,
-            pc: 0xC000,
+            pc: 0x0000,
             sp: 0xFD,
             status: Status::U.union(Status::I),
             cycles: 7,
             cycles_left: 0,
             #[cfg(debug_assertions)]
             observers: Vec::new(),
+            unof: false,
         }
     }
+
+    pub fn reset(&mut self, bus: &mut Bus) {
+        self.pc = self.fetch_word(bus, 0xFFFC);
+        println!("RESET VECTOR SET")
+    }
+
     #[inline]
     fn push_stack(&mut self, bus: &mut Bus, data: u8) {
         bus.write_byte(0x0100 | self.sp as u16, data);
@@ -653,6 +661,14 @@ impl Cpu {
     fn tya(&mut self, _bus: &mut Bus, _operand: u16) {
         self.a = self.y;
         self.set_zn(self.a);
+    }
+
+    fn unoff(&mut self, _bus: &mut Bus, _operand: u16) {
+        self.unof = true;
+    }
+
+    pub fn is_unoff(&self) -> bool {
+        return self.unof;
     }
 }
 
