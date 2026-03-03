@@ -38,7 +38,7 @@ pub struct Cpu {
     cycles_left: u8,
     cycles: u64,
     #[cfg(debug_assertions)]
-    observers: Vec<Box<dyn CpuObserver>>,
+    debugger: Option<Box<dyn CpuDebugger>>,
     unof: bool,
 }
 
@@ -54,14 +54,13 @@ impl Cpu {
             cycles: 7,
             cycles_left: 0,
             #[cfg(debug_assertions)]
-            observers: Vec::new(),
+            debugger: None,
             unof: false,
         }
     }
 
     pub fn reset(&mut self, bus: &mut Bus) {
         self.pc = self.fetch_word(bus, 0xFFFC);
-        println!("RESET VECTOR SET")
     }
 
     #[inline]
@@ -678,8 +677,8 @@ impl Cpu {
  */
 #[cfg(debug_assertions)]
 impl Cpu {
-    pub fn register_observer(&mut self, obs: Box<dyn CpuObserver>) {
-        self.observers.push(obs);
+    pub fn register_observer(&mut self, obs: Box<dyn CpuDebugger>) {
+        self.debugger = Some(obs);
     }
 
     fn take_snapshot(&mut self, op: Op, bus: &mut Bus, opcode: usize, offset: u8) {
@@ -705,8 +704,9 @@ impl Cpu {
             current_op: op.name,
             opcode_bytes: opcode_bytes,
         };
-        for observer in &mut self.observers {
-            observer.update(snap.clone());
+
+        if let Some(dbg) = self.debugger.as_mut() {
+            dbg.update(snap);
         }
     }
 }
@@ -727,6 +727,6 @@ pub struct CpuSnapshot {
 }
 
 #[cfg(debug_assertions)]
-pub trait CpuObserver {
+pub trait CpuDebugger {
     fn update(&mut self, snap: CpuSnapshot);
 }

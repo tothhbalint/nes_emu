@@ -1,5 +1,5 @@
 #[cfg(debug_assertions)]
-use crate::cpu::{CpuObserver, CpuSnapshot};
+use crate::cpu::{CpuDebugger, CpuSnapshot};
 use crate::{bus::Bus, cart::Cartridge, cpu::Cpu};
 use pyo3::exceptions::PyIOError;
 use pyo3::prelude::*;
@@ -214,7 +214,7 @@ impl CpuLogger {
 }
 
 #[cfg(debug_assertions)]
-impl CpuObserver for CpuLogger {
+impl CpuDebugger for CpuLogger {
     fn update(&mut self, snap: CpuSnapshot) {
         self.cycles_taken += snap.cycles_taken as u64;
 
