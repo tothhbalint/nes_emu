@@ -1,11 +1,9 @@
 #[cfg(debug_assertions)]
 use crate::cpu::{CpuObserver, CpuSnapshot};
 use crate::{bus::Bus, cart::Cartridge, cpu::Cpu};
-use pyo3::exceptions::PyIOError;
-use pyo3::prelude::*;
 #[cfg(debug_assertions)]
 use std::io::{BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 trait Clock {}
 
@@ -17,25 +15,17 @@ struct PalClock {}
 
 impl Clock for PalClock {}
 
-#[pyo3::pyclass(unsendable)]
 pub struct Nes {
     bus: Bus,
     cpu: Cpu,
 }
 
-#[pyo3::pymethods]
 impl Nes {
-    #[new]
     pub fn new() -> Self {
         Nes {
             bus: Bus::new(),
             cpu: Cpu::new(),
         }
-    }
-
-    fn load(&mut self, path: PathBuf) -> PyResult<()> {
-        self.load_cart(&path)
-            .map_err(|e| PyIOError::new_err(e.to_string()))
     }
 
     pub fn step(&mut self) {
@@ -78,12 +68,13 @@ impl Nes {
         self.load_cart("tests/roms/nestest.nes")
             .expect("failed to load nestest.nes");
 
-        self.cpu.pc = 0xC000;
+        self.cpu.pc = 0xC000; // nestest's automated entry point
 
         #[cfg(debug_assertions)]
         self.cpu.register_observer(Box::new(CpuLogger::new()));
 
         while !self.cpu.is_unoff() {
+            // stop at the first unofficial opcode
             self.cpu.step(&mut self.bus);
         }
     }
@@ -115,9 +106,10 @@ impl Nes {
             }
 
             match status {
-                0x80 if !started => started = true,
-                0x81 => self.cpu.reset(&mut self.bus),
+                0x80 if !started => started = true, // test signalled "started"
+                0x81 => self.cpu.reset(&mut self.bus), // test requested a reset
                 0x00..=0x7F if started || self.cpu.pc == 0xFFFE => {
+                    // done; value = result (0 = pass)
                     return TestResult {
                         status,
                         output: self.fetch_test_result(),
@@ -127,6 +119,7 @@ impl Nes {
             }
 
             if cycles >= max_cycles {
+                // format a diagnostic: pc, next 3 opcode bytes, and registers
                 let pc = self.cpu.pc;
                 let b0 = self.bus.read(pc);
                 let b1 = self.bus.read(pc.wrapping_add(1));

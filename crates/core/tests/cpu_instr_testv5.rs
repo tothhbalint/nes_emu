@@ -1,5 +1,5 @@
 mod test {
-    use emulator::nes;
+    use emulator_core::nes;
 
     macro_rules! rom_test {
         ($name:ident, $path:literal) => {

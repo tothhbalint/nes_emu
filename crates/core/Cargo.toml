@@ -1,0 +1,8 @@
+[package]
+name = "emulator-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bitflags.workspace = true
+thiserror.workspace = true
