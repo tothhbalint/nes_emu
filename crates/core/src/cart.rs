@@ -90,17 +90,6 @@ impl Cartridge {
         self.prg_rom[idx]
     }
 
-    /// Writes into the cartridge's PRG space so test ROMs can use the
-    /// $6000-$7FFF window as a status/output register.
-    pub fn write(&mut self, addr: usize, data: u8) {
-        let mut idx = addr % self.prg_rom.len();
-        if self.prg_rom.len() == PRG_UNIT {
-            idx %= PRG_UNIT;
-        }
-
-        self.prg_rom[idx] = data;
-    }
-
     /// The raw CHR ROM / pattern table data as parsed from the iNES file.
     pub fn chr(&self) -> &[u8] {
         &self.cart_ram
