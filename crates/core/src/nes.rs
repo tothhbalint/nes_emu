@@ -1,8 +1,6 @@
 #[cfg(debug_assertions)]
 use crate::cpu::{CpuObserver, CpuSnapshot};
 use crate::{bus::Bus, cart::Cartridge, cpu::Cpu};
-use pyo3::exceptions::PyIOError;
-use pyo3::prelude::*;
 use std::path::{Path, PathBuf};
 
 trait Clock {}
@@ -15,15 +13,12 @@ struct PalClock {}
 
 impl Clock for PalClock {}
 
-#[pyo3::pyclass(unsendable)]
 pub struct Nes {
     bus: Bus,
     cpu: Cpu,
 }
 
-#[pyo3::pymethods]
 impl Nes {
-    #[new]
     pub fn new() -> Self {
         let mut nes = Nes {
             bus: Bus::new(),
@@ -35,12 +30,6 @@ impl Nes {
 
         nes
     }
-
-    fn load(&mut self, path: PathBuf) -> PyResult<()> {
-        self.load_cart(&path)
-            .map_err(|e| PyIOError::new_err(e.to_string()))
-    }
-
     pub fn step(&mut self) {
         self.cpu.step(&mut self.bus);
     }

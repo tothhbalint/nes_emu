@@ -1,0 +1,16 @@
+[package]
+name = "emulator-python"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "_emulator"
+crate-type = ["cdylib"]
+
+[features]
+default = []
+extension-module = ["pyo3/extension-module"]   # maturin enables this
+
+[dependencies]
+emulator-core.workspace = true
+pyo3 = { workspace = true }
