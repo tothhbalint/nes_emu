@@ -7,6 +7,8 @@ pub struct Cartridge {
     // CPU DATA
     prg_rom: Vec<u8>,
     cart_ram: Vec<u8>,
+    // 8 KB cartridge work RAM mapped at $6000-$7FFF
+    wram: Vec<u8>,
 }
 
 fn parse_header(bytes: &Vec<u8>) -> std::io::Result<[u8; 16]> {
@@ -55,7 +57,28 @@ impl Cartridge {
             })?
             .to_vec();
 
-        Ok(Cartridge { prg_rom, cart_ram })
+        Ok(Cartridge {
+            prg_rom,
+            cart_ram,
+            wram: vec![0; 0x2000],
+        })
+    }
+
+    /// Reads from the cartridge address space ($4020-$FFFF).
+    pub fn read(&self, addr: usize) -> u8 {
+        match addr {
+            0x6000..=0x7FFF => self.wram[addr - 0x6000],
+            0x8000..=0xFFFF => self.read_prg(addr),
+            _ => 0,
+        }
+    }
+
+    /// Writes to the cartridge address space ($4020-$FFFF). Writes to PRG ROM
+    /// (and, for now, expansion) are ignored; $6000-$7FFF is cartridge WRAM.
+    pub fn write(&mut self, addr: usize, data: u8) {
+        if let 0x6000..=0x7FFF = addr {
+            self.wram[addr - 0x6000] = data;
+        }
     }
 
     pub fn read_prg(&self, addr: usize) -> u8 {

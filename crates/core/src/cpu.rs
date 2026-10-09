@@ -31,7 +31,7 @@ pub struct Cpu {
     a: u8,
     x: u8,
     y: u8,
-    pc: u16,
+    pub pc: u16,
     sp: u8,
     status: Status,
     //Timing
@@ -39,6 +39,7 @@ pub struct Cpu {
     cycles: u64,
     #[cfg(debug_assertions)]
     observers: Vec<Box<dyn CpuObserver>>,
+    unof: bool,
 }
 
 impl Cpu {
@@ -54,8 +55,26 @@ impl Cpu {
             cycles_left: 0,
             #[cfg(debug_assertions)]
             observers: Vec::new(),
+            unof: false,
         }
     }
+
+    pub fn reset(&mut self, bus: &mut Bus) {
+        self.pc = self.fetch_word(bus, 0xFFFC);
+    }
+
+    /// Register state formatted like a nestest log line, for diagnosing a hung ROM.
+    pub fn debug_registers(&self) -> String {
+        format!(
+            "A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X}",
+            self.a,
+            self.x,
+            self.y,
+            self.status.bits(),
+            self.sp
+        )
+    }
+
     #[inline]
     fn push_stack(&mut self, bus: &mut Bus, data: u8) {
         bus.write_byte(0x0100 | self.sp as u16, data);
@@ -228,16 +247,27 @@ impl Cpu {
      */
     fn nop(&mut self, _bus: &mut Bus, _operand: u16) {}
 
+    fn unoff(&mut self, _bus: &mut Bus, _operand: u16) {
+        self.unof = true;
+    }
+
+    pub fn is_unoff(&self) -> bool {
+        self.unof
+    }
+
     #[inline]
     fn brk(&mut self, bus: &mut Bus, _operand: u16) {
-        let hi = (self.pc >> 8) as u8;
-        let lo = (self.pc & 0xFF) as u8;
-        self.push_stack(bus, hi);
-        self.push_stack(bus, lo);
-        self.push_stack(bus, self.status.bits() | 0x10);
-        self.pc = 0xFFFE;
+        // `step` already added 1 (past the opcode). Hardware pushes the address
+        // after BRK's padding byte, i.e. BRK_addr + 2 == pc + 1.
+        let ret = self.pc.wrapping_add(1);
+        self.push_stack(bus, (ret >> 8) as u8);
+        self.push_stack(bus, (ret & 0xFF) as u8);
+        // B (0x10) and U (0x20) are always set in the value BRK pushes.
+        self.push_stack(bus, self.status.bits() | 0x30);
 
         self.status.set(Status::I, true);
+        // Read the IRQ/BRK vector; don't hardcode the vector address.
+        self.pc = self.fetch_word(bus, 0xFFFE);
     }
 
     #[inline]

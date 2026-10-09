@@ -51,11 +51,11 @@ mod transfer_instructions;
 // Build lookup table
 pub(super) const fn make_op_table() -> [Op; 256] {
     let mut table = [Op {
-        exec: Cpu::nop,
+        exec: Cpu::unoff,
         addr_mode: Mode::Implied,
-        base_cycles: 2,
+        base_cycles: 0,
         #[cfg(debug_assertions)]
-        name: "NOP",
+        name: "U",
     }; 256];
 
     access_instructions::build(&mut table);
@@ -68,6 +68,14 @@ pub(super) const fn make_op_table() -> [Op; 256] {
     jump_instructions::build(&mut table);
     stack_instructions::build(&mut table);
     flags_instructions::build(&mut table);
+
+    table[0xEA] = Op {
+        exec: Cpu::nop,
+        addr_mode: Mode::Implied,
+        base_cycles: 2,
+        #[cfg(debug_assertions)]
+        name: "NOP",
+    };
 
     table
 }

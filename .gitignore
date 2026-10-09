@@ -1,3 +1,4 @@
 crates/*/target
 target
 .DS_STORE
+log.log

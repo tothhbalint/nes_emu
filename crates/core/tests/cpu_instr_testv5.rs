@@ -6,11 +6,11 @@ mod test {
             #[test]
             fn $name() {
                 let mut emu = nes::Nes::new();
-                // let result = emu.run_test_rom($path, 5_000_000, false);
+                let result = emu.run_test_rom($path, 15_000_000, false);
 
-                // let output = String::from_utf8_lossy(&result.output);
+                let output = String::from_utf8_lossy(&result.output);
 
-                // assert_eq!(result.status, 0, "ROM failed:\n{}", output);
+                assert_eq!(result.status, 0, "ROM failed:\n{}", output);
             }
         };
     }

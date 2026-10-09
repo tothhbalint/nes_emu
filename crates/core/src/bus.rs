@@ -28,21 +28,27 @@ impl Bus {
     }
 
     pub fn write_byte(&mut self, addr: u16, data: u8) {
-        self.ram[addr as usize % 2048] = data;
+        match addr {
+            // 2 KB internal RAM, mirrored 4x
+            0x0000..=0x1FFF => self.ram[addr as usize % 2048] = data,
+            // PPU / APU / I-O registers: not modeled yet
+            0x2000..=0x401F => {}
+            // Expansion ($4020-$5FFF) + cartridge space ($6000-$FFFF)
+            0x4020..=0xFFFF => match &mut self.cart {
+                Some(cart) => cart.write(addr as usize, data),
+                None => panic!("No cart"),
+            },
+        }
     }
 
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
-            0x0000..0x2000 => self.ram[addr as usize % 2048], // RAM
-            0x2000..0x4000 => 0x0,                            // PPU
-            0x4000..0x4018 => 0x0,                            // APU/I/O
-            0x4018..0x4020 => 0x0,                            // CPU TEST MODE
-            0x4020..0x8000 => 0x0,                            //UNMAPPED
-            0x8000..=0xFFFF => match &self.cart {
-                Some(cart) => cart.read_prg(addr as usize),
+            0x0000..=0x1FFF => self.ram[addr as usize % 2048], // RAM (mirrored)
+            0x2000..=0x401F => 0x0,                            // PPU / APU / I-O
+            0x4020..=0xFFFF => match &self.cart {
+                Some(cart) => cart.read(addr as usize),
                 None => panic!("No cart"),
             },
-            _ => panic!("Unsupported address: {}", addr),
         }
     }
 }
