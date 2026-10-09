@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/python", "crates/app", "crates/bench"]
+default-members = ["crates/core", "crates/app"]   # plain `cargo build` skips pyo3
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+bitflags  = "2.10.0"
+thiserror = "2.0.18"
+pyo3      = "0.28"
+criterion = "0.5"
+emulator-core = { path = "crates/core" }
