@@ -1,4 +1,3 @@
-use crate::nes::Nes;
 
 pub mod bus;
 pub mod cart;

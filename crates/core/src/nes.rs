@@ -1,7 +1,7 @@
 #[cfg(debug_assertions)]
 use crate::cpu::{CpuObserver, CpuSnapshot};
 use crate::{bus::Bus, cart::Cartridge, cpu::Cpu};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 trait Clock {}
 

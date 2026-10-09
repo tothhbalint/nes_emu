@@ -1,5 +1,5 @@
 use super::Mode::{Absolute, AbsoluteX, Accumulator, ZeroPage, ZeroPageX};
-use super::{build_variants, Cpu, Instr, InstrFn, OpTable};
+use super::{build_variants, Cpu, Instr, OpTable};
 
 pub const fn build(table: &mut OpTable) {
     build_variants(table, ASL, "ASL");
