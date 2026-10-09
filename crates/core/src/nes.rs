@@ -50,7 +50,7 @@ impl Nes {
 
 #[cfg(debug_assertions)]
 #[derive(Clone)]
-pub struct CpuLogger {
+struct CpuLogger {
     snapshots: Vec<CpuSnapshot>,
     cycles_taken: u64,
 }
