@@ -31,7 +31,7 @@ pub struct Cpu {
     a: u8,
     x: u8,
     y: u8,
-    pc: u16,
+    pub pc: u16,
     sp: u8,
     status: Status,
     //Timing
@@ -39,6 +39,7 @@ pub struct Cpu {
     cycles: u64,
     #[cfg(debug_assertions)]
     observers: Vec<Box<dyn CpuObserver>>,
+    unof: bool,
 }
 
 impl Cpu {
@@ -54,8 +55,26 @@ impl Cpu {
             cycles_left: 0,
             #[cfg(debug_assertions)]
             observers: Vec::new(),
+            unof: false,
         }
     }
+
+    pub fn reset(&mut self, bus: &mut Bus) {
+        self.pc = self.fetch_word(bus, 0xFFFC);
+    }
+
+    /// Register state formatted like a nestest log line, for diagnosing a hung ROM.
+    pub fn debug_registers(&self) -> String {
+        format!(
+            "A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X}",
+            self.a,
+            self.x,
+            self.y,
+            self.status.bits(),
+            self.sp
+        )
+    }
+
     #[inline]
     fn push_stack(&mut self, bus: &mut Bus, data: u8) {
         bus.write_byte(0x0100 | self.sp as u16, data);
@@ -193,7 +212,7 @@ impl Cpu {
                     let lo = self.fetch_byte(bus, arg as u16) as u16;
                     let hi = self.fetch_byte(bus, arg.wrapping_add(1) as u16) as u16;
 
-                    let addr_ptr = (lo | (hi << 8));
+                    let addr_ptr = lo | (hi << 8);
                     let (res, carry) = self.page_cross_add(addr_ptr, self.y as u16);
 
                     (res as u16, 2, carry)
@@ -228,16 +247,27 @@ impl Cpu {
      */
     fn nop(&mut self, _bus: &mut Bus, _operand: u16) {}
 
+    fn unoff(&mut self, _bus: &mut Bus, _operand: u16) {
+        self.unof = true;
+    }
+
+    pub fn is_unoff(&self) -> bool {
+        self.unof
+    }
+
     #[inline]
     fn brk(&mut self, bus: &mut Bus, _operand: u16) {
-        let hi = (self.pc >> 8) as u8;
-        let lo = (self.pc & 0xFF) as u8;
-        self.push_stack(bus, hi);
-        self.push_stack(bus, lo);
-        self.push_stack(bus, self.status.bits() | 0x10);
-        self.pc = 0xFFFE;
+        // `step` already added 1 (past the opcode). Hardware pushes the address
+        // after BRK's padding byte, i.e. BRK_addr + 2 == pc + 1.
+        let ret = self.pc.wrapping_add(1);
+        self.push_stack(bus, (ret >> 8) as u8);
+        self.push_stack(bus, (ret & 0xFF) as u8);
+        // B (0x10) and U (0x20) are always set in the value BRK pushes.
+        self.push_stack(bus, self.status.bits() | 0x30);
 
         self.status.set(Status::I, true);
+        // Read the IRQ/BRK vector; don't hardcode the vector address.
+        self.pc = self.fetch_word(bus, 0xFFFE);
     }
 
     #[inline]
@@ -380,19 +410,19 @@ impl Cpu {
         self.set_zn(val);
     }
     #[inline]
-    fn clc(&mut self, bus: &mut Bus, operand: u16) {
+    fn clc(&mut self, _bus: &mut Bus, _operand: u16) {
         self.status.remove(Status::C);
     }
     #[inline]
-    fn cld(&mut self, bus: &mut Bus, operand: u16) {
+    fn cld(&mut self, _bus: &mut Bus, _operand: u16) {
         self.status.remove(Status::D);
     }
     #[inline]
-    fn cli(&mut self, bus: &mut Bus, operand: u16) {
+    fn cli(&mut self, _bus: &mut Bus, _operand: u16) {
         self.status.remove(Status::I);
     }
     #[inline]
-    fn clv(&mut self, bus: &mut Bus, operand: u16) {
+    fn clv(&mut self, _bus: &mut Bus, _operand: u16) {
         self.status.remove(Status::V);
     }
     #[inline]
@@ -405,12 +435,12 @@ impl Cpu {
         self.set_zn(memory);
     }
     #[inline]
-    fn dex(&mut self, bus: &mut Bus, operand: u16) {
+    fn dex(&mut self, _bus: &mut Bus, _operand: u16) {
         self.x = self.x.wrapping_sub(1);
         self.set_zn(self.x);
     }
     #[inline]
-    fn dey(&mut self, bus: &mut Bus, operand: u16) {
+    fn dey(&mut self, _bus: &mut Bus, _operand: u16) {
         self.y = self.y.wrapping_sub(1);
         self.set_zn(self.y);
     }
@@ -431,18 +461,18 @@ impl Cpu {
         self.set_zn(memory);
     }
     #[inline]
-    fn inx(&mut self, bus: &mut Bus, operand: u16) {
+    fn inx(&mut self, _bus: &mut Bus, _operand: u16) {
         self.x = self.x.wrapping_add(1);
         self.set_zn(self.x);
     }
     #[inline]
-    fn iny(&mut self, bus: &mut Bus, operand: u16) {
+    fn iny(&mut self, _bus: &mut Bus, _operand: u16) {
         self.y = self.y.wrapping_add(1);
         self.set_zn(self.y);
     }
 
     #[inline]
-    fn jmp(&mut self, bus: &mut Bus, operand: u16) {
+    fn jmp(&mut self, _bus: &mut Bus, operand: u16) {
         self.pc = operand;
     }
     #[inline]
@@ -499,11 +529,11 @@ impl Cpu {
         self.set_zn(self.a);
     }
     #[inline]
-    fn pha(&mut self, bus: &mut Bus, operand: u16) {
+    fn pha(&mut self, bus: &mut Bus, _operand: u16) {
         self.push_stack(bus, self.a);
     }
     #[inline]
-    fn php(&mut self, bus: &mut Bus, operand: u16) {
+    fn php(&mut self, bus: &mut Bus, _operand: u16) {
         let mut flags = self.status.bits();
 
         flags |= 0x10;
@@ -512,20 +542,20 @@ impl Cpu {
         self.push_stack(bus, flags);
     }
     #[inline]
-    fn pla(&mut self, bus: &mut Bus, operand: u16) {
+    fn pla(&mut self, bus: &mut Bus, _operand: u16) {
         let val = self.pop_stack(bus);
         self.a = val;
 
         self.set_zn(self.a);
     }
     #[inline]
-    fn plp(&mut self, bus: &mut Bus, operand: u16) {
-        let mut pulled = self.pop_stack(bus);
+    fn plp(&mut self, bus: &mut Bus, _operand: u16) {
+        let pulled = self.pop_stack(bus);
         self.status = Status::from_bits(pulled & 0xEF | 0x20).unwrap();
     }
 
     #[inline]
-    fn rol_a(&mut self, bus: &mut Bus, operand: u16) {
+    fn rol_a(&mut self, _bus: &mut Bus, _operand: u16) {
         let memory = self.a;
 
         let result = (memory << 1) | self.status.contains(Status::C) as u8;
@@ -547,7 +577,7 @@ impl Cpu {
     }
 
     #[inline]
-    fn ror_a(&mut self, bus: &mut Bus, operand: u16) {
+    fn ror_a(&mut self, _bus: &mut Bus, _operand: u16) {
         let mut memory = self.a;
 
         memory = (memory >> 1) | ((self.status.contains(Status::C) as u8) << 7);
@@ -569,8 +599,8 @@ impl Cpu {
     }
 
     #[inline]
-    fn rti(&mut self, bus: &mut Bus, operand: u16) {
-        let mut pulled = self.pop_stack(bus);
+    fn rti(&mut self, bus: &mut Bus, _operand: u16) {
+        let pulled = self.pop_stack(bus);
         self.status = Status::from_bits(pulled & 0xEF | 0x20).unwrap();
         let lo = self.pop_stack(bus);
         let hi = self.pop_stack(bus);
@@ -578,7 +608,7 @@ impl Cpu {
         self.pc = (hi as u16) << 8 | (lo as u16);
     }
     #[inline]
-    fn rts(&mut self, bus: &mut Bus, operand: u16) {
+    fn rts(&mut self, bus: &mut Bus, _operand: u16) {
         let lo = self.pop_stack(bus);
         let hi = self.pop_stack(bus);
 
@@ -602,15 +632,15 @@ impl Cpu {
         self.set_zn(self.a);
     }
     #[inline]
-    fn sec(&mut self, bus: &mut Bus, operand: u16) {
+    fn sec(&mut self, _bus: &mut Bus, _operand: u16) {
         self.status.set(Status::C, true);
     }
     #[inline]
-    fn sed(&mut self, bus: &mut Bus, operand: u16) {
+    fn sed(&mut self, _bus: &mut Bus, _operand: u16) {
         self.status.set(Status::D, true);
     }
     #[inline]
-    fn sei(&mut self, bus: &mut Bus, operand: u16) {
+    fn sei(&mut self, _bus: &mut Bus, _operand: u16) {
         self.status.set(Status::I, true);
     }
     #[inline]
@@ -626,27 +656,27 @@ impl Cpu {
         bus.write_byte(operand, self.y);
     }
     #[inline]
-    fn tax(&mut self, bus: &mut Bus, operand: u16) {
+    fn tax(&mut self, _bus: &mut Bus, _operand: u16) {
         self.x = self.a;
         self.set_zn(self.x);
     }
     #[inline]
-    fn tay(&mut self, bus: &mut Bus, operand: u16) {
+    fn tay(&mut self, _bus: &mut Bus, _operand: u16) {
         self.y = self.a;
         self.set_zn(self.y);
     }
     #[inline]
-    fn tsx(&mut self, bus: &mut Bus, operand: u16) {
+    fn tsx(&mut self, _bus: &mut Bus, _operand: u16) {
         self.x = self.sp;
         self.set_zn(self.x);
     }
     #[inline]
-    fn txa(&mut self, bus: &mut Bus, operand: u16) {
+    fn txa(&mut self, _bus: &mut Bus, _operand: u16) {
         self.a = self.x;
         self.set_zn(self.a);
     }
     #[inline]
-    fn txs(&mut self, bus: &mut Bus, operand: u16) {
+    fn txs(&mut self, _bus: &mut Bus, _operand: u16) {
         self.sp = self.x;
     }
     #[inline]

@@ -59,14 +59,28 @@ impl Cartridge {
     }
 
     pub fn read_prg(&self, addr: usize) -> u8 {
-        assert!(addr >= 0x8000, "Address below PRG ROM mapping");
-
         let mut idx = addr % self.prg_rom.len();
         if self.prg_rom.len() == PRG_UNIT {
             idx = idx % PRG_UNIT;
         }
 
         self.prg_rom[idx]
+    }
+
+    /// Writes into the cartridge's PRG space so test ROMs can use the
+    /// $6000-$7FFF window as a status/output register.
+    pub fn write(&mut self, addr: usize, data: u8) {
+        let mut idx = addr % self.prg_rom.len();
+        if self.prg_rom.len() == PRG_UNIT {
+            idx %= PRG_UNIT;
+        }
+
+        self.prg_rom[idx] = data;
+    }
+
+    /// The raw CHR ROM / pattern table data as parsed from the iNES file.
+    pub fn chr(&self) -> &[u8] {
+        &self.cart_ram
     }
     /// Dumps a range of CPU addresses mapped to PRG ROM
     /// start_addr and end_addr are CPU addresses (0x8000..0xFFFF)

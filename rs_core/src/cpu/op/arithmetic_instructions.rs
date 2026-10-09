@@ -1,4 +1,4 @@
-use crate::cpu::op::{build_variants, Instr, OpTable};
+use crate::cpu::op::{build_variants, OpTable};
 
 use super::{Cpu, InstrVariants};
 

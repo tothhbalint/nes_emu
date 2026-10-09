@@ -3,7 +3,6 @@ pub mod cart;
 pub mod cpu;
 pub mod nes;
 
-use std::{ops::Range, time::Duration};
 
 use crate::nes::Nes;
 

@@ -1,5 +1,5 @@
 mod test {
-    use rs_core::nes;
+    use emulator::nes;
 
     use std::fs;
 
