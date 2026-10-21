@@ -68,7 +68,7 @@ impl Nes {
         self.load_cart("tests/roms/nestest.nes")
             .expect("failed to load nestest.nes");
 
-        self.cpu.pc = 0xC000; // nestest's automated entry point
+        self.cpu.jump_to(0xC000);
 
         #[cfg(debug_assertions)]
         self.cpu.register_observer(Box::new(CpuLogger::new()));
@@ -106,9 +106,9 @@ impl Nes {
             }
 
             match status {
-                0x80 if !started => started = true, // test signalled "started"
+                0x80 if !started => started = true,    // test signalled "started"
                 0x81 => self.cpu.reset(&mut self.bus), // test requested a reset
-                0x00..=0x7F if started || self.cpu.pc == 0xFFFE => {
+                0x00..=0x7F if started || self.cpu.pc() == 0xFFFE => {
                     // done; value = result (0 = pass)
                     return TestResult {
                         status,
@@ -120,7 +120,7 @@ impl Nes {
 
             if cycles >= max_cycles {
                 // format a diagnostic: pc, next 3 opcode bytes, and registers
-                let pc = self.cpu.pc;
+                let pc = self.cpu.pc();
                 let b0 = self.bus.read(pc);
                 let b1 = self.bus.read(pc.wrapping_add(1));
                 let b2 = self.bus.read(pc.wrapping_add(2));

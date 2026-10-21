@@ -31,7 +31,7 @@ pub struct Cpu {
     a: u8,
     x: u8,
     y: u8,
-    pub pc: u16,
+    pc: u16,
     sp: u8,
     status: Status,
     //Timing
@@ -73,59 +73,6 @@ impl Cpu {
             self.status.bits(),
             self.sp
         )
-    }
-
-    #[inline]
-    fn push_stack(&mut self, bus: &mut Bus, data: u8) {
-        bus.write_byte(0x0100 | self.sp as u16, data);
-        self.sp = self.sp.wrapping_sub(1);
-    }
-
-    #[inline]
-    fn pop_stack(&mut self, bus: &mut Bus) -> u8 {
-        self.sp = self.sp.wrapping_add(1);
-        let data = bus.read(0x0100 | self.sp as u16);
-
-        data
-    }
-
-    #[inline]
-    fn fetch_byte(&self, bus: &mut Bus, addr: u16) -> u8 {
-        bus.read(addr)
-    }
-
-    #[inline]
-    fn fetch_word(&self, bus: &mut Bus, addr: u16) -> u16 {
-        let hi = self.fetch_byte(bus, addr);
-        let lo = self.fetch_byte(bus, addr + 1);
-
-        (lo as u16) << 8 | hi as u16
-    }
-
-    fn set_zn(&mut self, value: u8) {
-        // Z flag: set if value is zero
-        self.status.set(Status::Z, value == 0);
-
-        // N flag: set if bit 7 is set (value & 0x80 != 0)
-        self.status.set(Status::N, value & 0x80 != 0);
-    }
-
-    fn set_zvn(&mut self, value: u8) {
-        // Z flag: set if value is zero
-        self.status.set(Status::Z, value == 0);
-
-        // N flag: set if bit 7 is set (value & 0x80 != 0)
-        self.status.set(Status::N, value & 0x80 != 0);
-
-        // V flag: set if bit 6 is set (value & 0x40 != 0)
-        self.status.set(Status::V, value & 0x40 != 0);
-    }
-
-    fn page_cross_add(&self, lhs: u16, rhs: u16) -> (u16, bool) {
-        let res = lhs.wrapping_add(rhs);
-        let carry = (res & 0xFF00) != (lhs & 0xFF00);
-
-        (res, carry)
     }
 
     pub fn step(&mut self, bus: &mut Bus) {
@@ -239,6 +186,69 @@ impl Cpu {
             self.pc = self.pc.wrapping_add(offset as u16);
             (op.exec)(self, bus, operand);
         }
+    }
+
+    #[inline]
+    pub fn pc(&self) -> u16 {
+        self.pc
+    }
+
+    pub fn jump_to(&mut self, addr: u16) {
+        self.pc = addr;
+        self.cycles_left = 0; // don't leave half-finished instr
+    }
+
+    #[inline]
+    fn push_stack(&mut self, bus: &mut Bus, data: u8) {
+        bus.write_byte(0x0100 | self.sp as u16, data);
+        self.sp = self.sp.wrapping_sub(1);
+    }
+
+    #[inline]
+    fn pop_stack(&mut self, bus: &mut Bus) -> u8 {
+        self.sp = self.sp.wrapping_add(1);
+        let data = bus.read(0x0100 | self.sp as u16);
+
+        data
+    }
+
+    #[inline]
+    fn fetch_byte(&self, bus: &mut Bus, addr: u16) -> u8 {
+        bus.read(addr)
+    }
+
+    #[inline]
+    fn fetch_word(&self, bus: &mut Bus, addr: u16) -> u16 {
+        let hi = self.fetch_byte(bus, addr);
+        let lo = self.fetch_byte(bus, addr + 1);
+
+        (lo as u16) << 8 | hi as u16
+    }
+
+    fn set_zn(&mut self, value: u8) {
+        // Z flag: set if value is zero
+        self.status.set(Status::Z, value == 0);
+
+        // N flag: set if bit 7 is set (value & 0x80 != 0)
+        self.status.set(Status::N, value & 0x80 != 0);
+    }
+
+    fn set_zvn(&mut self, value: u8) {
+        // Z flag: set if value is zero
+        self.status.set(Status::Z, value == 0);
+
+        // N flag: set if bit 7 is set (value & 0x80 != 0)
+        self.status.set(Status::N, value & 0x80 != 0);
+
+        // V flag: set if bit 6 is set (value & 0x40 != 0)
+        self.status.set(Status::V, value & 0x40 != 0);
+    }
+
+    fn page_cross_add(&self, lhs: u16, rhs: u16) -> (u16, bool) {
+        let res = lhs.wrapping_add(rhs);
+        let carry = (res & 0xFF00) != (lhs & 0xFF00);
+
+        (res, carry)
     }
 
     /* ----------------------
