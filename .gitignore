@@ -2,3 +2,5 @@ crates/*/target
 target
 .DS_STORE
 log.log
+*.so
+*__pycache__*
