@@ -24,7 +24,13 @@ bitflags! {
 
 const OP_LOOKUP: [Op; 256] = make_op_table();
 
-struct OpState {}
+struct Decoded {
+    pub code: u8,
+    pub inst: Op,
+    pub operand: u16,
+    pub offset: u8,
+    pub page_cross: bool,
+}
 
 pub struct Cpu {
     //Registers
@@ -37,9 +43,9 @@ pub struct Cpu {
     //Timing
     cycles_left: u8,
     cycles: u64,
-    #[cfg(debug_assertions)]
-    observers: Vec<Box<dyn CpuObserver>>,
-    unof: bool,
+    unof: bool, //TODO remove this
+    #[cfg(feature = "debug")]
+    current_instr: InstrInfo,
 }
 
 impl Cpu {
@@ -53,14 +59,24 @@ impl Cpu {
             status: Status::U.union(Status::I),
             cycles: 7,
             cycles_left: 0,
-            #[cfg(debug_assertions)]
-            observers: Vec::new(),
             unof: false,
+            #[cfg(feature = "debug")]
+            current_instr: InstrInfo::NONE,
         }
     }
 
     pub fn reset(&mut self, bus: &mut Bus) {
-        self.pc = self.fetch_word(bus, 0xFFFC);
+        self.jump_to(self.fetch_word(bus, 0xFFFC));
+    }
+
+    #[inline]
+    pub fn pc(&self) -> u16 {
+        self.pc
+    }
+
+    pub fn jump_to(&mut self, addr: u16) {
+        self.pc = addr;
+        self.cycles_left = 0; // don't leave half-finished instr
     }
 
     /// Register state formatted like a nestest log line, for diagnosing a hung ROM.
@@ -75,127 +91,155 @@ impl Cpu {
         )
     }
 
+    // Step until next instruction
     pub fn step(&mut self, bus: &mut Bus) {
         if self.pc == 0xFFFF {
             return;
         }
+        while (self.cycles_left != 0) {
+            self.tick(bus);
+        }
+        self.tick(bus);
+        while (self.cycles_left != 0) {
+            self.tick(bus);
+        }
+    }
 
+    // Advance one clock cycle
+    pub fn tick(&mut self, bus: &mut Bus) {
+        if self.pc == 0xFFFF {
+            return;
+        }
+
+        // Advance to next cycle
         if self.cycles_left != 0 {
             self.cycles += 1;
             self.cycles_left -= 1;
-        } else {
-            let opcode = self.fetch_byte(bus, self.pc);
+            return;
+        }
 
-            let op = OP_LOOKUP[opcode as usize];
+        let op = self.fetch_current_op(bus);
 
-            let (operand, offset, page_cross): (u16, u8, bool) = match op.addr_mode {
-                addressing::Mode::Accumulator | addressing::Mode::Implied => (0x0000, 1, false),
-                addressing::Mode::Immediate | addressing::Mode::Relative => {
-                    let addr = self.pc + 1;
-                    (addr, 2, false)
-                }
-                addressing::Mode::Absolute => {
-                    let addr = self.fetch_word(bus, self.pc + 1);
-                    (addr, 3, false)
-                }
-                addressing::Mode::AbsoluteX | addressing::Mode::AbsoluteXWithCross => {
-                    let addr = self.fetch_word(bus, self.pc + 1);
-                    let (res, carry) = self.page_cross_add(addr, self.x as u16);
-                    (res, 3, carry)
-                }
-                addressing::Mode::AbsoluteY | addressing::Mode::AbsoluteYWithCross => {
-                    let addr = self.fetch_word(bus, self.pc + 1);
-                    let (res, carry) = self.page_cross_add(addr, self.y as u16);
-                    (res, 3, carry)
-                }
-                addressing::Mode::ZeroPage => {
-                    let addr = self.fetch_byte(bus, self.pc + 1) as u16;
-                    (addr, 2, false)
-                }
-                addressing::Mode::ZeroPageX => {
-                    let mut addr = self.fetch_byte(bus, self.pc + 1);
-                    addr = addr.wrapping_add(self.x);
-                    (addr as u16, 2, false)
-                }
-                addressing::Mode::ZeroPageY => {
-                    let mut addr = self.fetch_byte(bus, self.pc + 1);
-                    addr = addr.wrapping_add(self.y);
-                    (addr as u16, 2, false)
-                }
-                addressing::Mode::Indirect => {
-                    let ptr_addr = self.fetch_word(bus, self.pc + 1);
+        #[cfg(feature = "debug")]
+        {
+            self.current_instr = self.build_instr_info(&op, bus);
+        }
 
-                    let final_addr = if ptr_addr & 0xFF == 0xFF {
-                        // Page boundary bug: wrap within page
-                        let lo = self.fetch_byte(bus, ptr_addr);
-                        let hi = self.fetch_byte(bus, ptr_addr & 0xFF00); // Wraps!
-                        ((hi as u16) << 8) | (lo as u16)
-                    } else {
-                        // Normal case
-                        self.fetch_word(bus, ptr_addr)
-                    };
+        self.cycles_left = op.inst.base_cycles;
 
-                    (final_addr, 3, false)
-                }
-                /*
-                 * val = PEEK(PEEK((arg + X) % 256) + PEEK((arg + X + 1) % 256) * 256)
-                 */
-                addressing::Mode::IndirectX => {
-                    let arg = self.fetch_byte(bus, self.pc + 1);
-                    let ptr_addr = arg.wrapping_add(self.x);
+        if op.page_cross
+            && matches!(
+                op.inst.addr_mode,
+                addressing::Mode::AbsoluteXWithCross
+                    | addressing::Mode::AbsoluteYWithCross
+                    | addressing::Mode::IndirectYWithCross
+            )
+        {
+            self.cycles_left += 1;
+        }
 
-                    // Read the two bytes from zero page to form the pointer
-                    let lo = self.fetch_byte(bus, ptr_addr as u16) as u16;
-                    let hi = self.fetch_byte(bus, ptr_addr.wrapping_add(1) as u16) as u16;
+        self.pc = self.pc.wrapping_add(op.offset as u16);
+        (op.inst.exec)(self, bus, op.operand);
+    }
 
-                    let addr_ptr = lo | (hi << 8);
-                    (addr_ptr, 2, false)
-                }
-                /*
-                val = PEEK(PEEK(arg) + PEEK((arg + 1) % 256) * 256 + Y)
-                */
-                addressing::Mode::IndirectY | addressing::Mode::IndirectYWithCross => {
-                    let arg = self.fetch_byte(bus, self.pc + 1);
-                    let lo = self.fetch_byte(bus, arg as u16) as u16;
-                    let hi = self.fetch_byte(bus, arg.wrapping_add(1) as u16) as u16;
+    #[inline]
+    fn fetch_current_op(&self, bus: &mut Bus) -> Decoded {
+        let opcode = self.fetch_byte(bus, self.pc);
 
-                    let addr_ptr = lo | (hi << 8);
-                    let (res, carry) = self.page_cross_add(addr_ptr, self.y as u16);
+        let op = OP_LOOKUP[opcode as usize];
 
-                    (res as u16, 2, carry)
-                }
-                _ => (0xBEEF, 0, false),
-            };
+        let (operand, offset, page_cross) = self.decode_addressing(op, bus);
 
-            #[cfg(debug_assertions)]
-            self.take_snapshot(op, bus, opcode as usize, offset);
-
-            self.cycles_left = op.base_cycles;
-
-            if page_cross
-                && matches!(
-                    op.addr_mode,
-                    addressing::Mode::AbsoluteXWithCross
-                        | addressing::Mode::AbsoluteYWithCross
-                        | addressing::Mode::IndirectYWithCross
-                )
-            {
-                self.cycles_left += 1;
-            }
-
-            self.pc = self.pc.wrapping_add(offset as u16);
-            (op.exec)(self, bus, operand);
+        Decoded {
+            code: opcode,
+            inst: op,
+            operand,
+            offset,
+            page_cross,
         }
     }
 
     #[inline]
-    pub fn pc(&self) -> u16 {
-        self.pc
-    }
+    fn decode_addressing(&self, op: Op, bus: &mut Bus) -> (u16, u8, bool) {
+        let (operand, offset, page_cross): (u16, u8, bool) = match op.addr_mode {
+            addressing::Mode::Accumulator | addressing::Mode::Implied => (0x0000, 1, false),
+            addressing::Mode::Immediate | addressing::Mode::Relative => {
+                let addr = self.pc + 1;
+                (addr, 2, false)
+            }
+            addressing::Mode::Absolute => {
+                let addr = self.fetch_word(bus, self.pc + 1);
+                (addr, 3, false)
+            }
+            addressing::Mode::AbsoluteX | addressing::Mode::AbsoluteXWithCross => {
+                let addr = self.fetch_word(bus, self.pc + 1);
+                let (res, carry) = self.page_cross_add(addr, self.x as u16);
+                (res, 3, carry)
+            }
+            addressing::Mode::AbsoluteY | addressing::Mode::AbsoluteYWithCross => {
+                let addr = self.fetch_word(bus, self.pc + 1);
+                let (res, carry) = self.page_cross_add(addr, self.y as u16);
+                (res, 3, carry)
+            }
+            addressing::Mode::ZeroPage => {
+                let addr = self.fetch_byte(bus, self.pc + 1) as u16;
+                (addr, 2, false)
+            }
+            addressing::Mode::ZeroPageX => {
+                let mut addr = self.fetch_byte(bus, self.pc + 1);
+                addr = addr.wrapping_add(self.x);
+                (addr as u16, 2, false)
+            }
+            addressing::Mode::ZeroPageY => {
+                let mut addr = self.fetch_byte(bus, self.pc + 1);
+                addr = addr.wrapping_add(self.y);
+                (addr as u16, 2, false)
+            }
+            addressing::Mode::Indirect => {
+                let ptr_addr = self.fetch_word(bus, self.pc + 1);
 
-    pub fn jump_to(&mut self, addr: u16) {
-        self.pc = addr;
-        self.cycles_left = 0; // don't leave half-finished instr
+                let final_addr = if ptr_addr & 0xFF == 0xFF {
+                    // Page boundary bug: wrap within page
+                    let lo = self.fetch_byte(bus, ptr_addr);
+                    let hi = self.fetch_byte(bus, ptr_addr & 0xFF00); // Wraps!
+                    ((hi as u16) << 8) | (lo as u16)
+                } else {
+                    // Normal case
+                    self.fetch_word(bus, ptr_addr)
+                };
+
+                (final_addr, 3, false)
+            }
+            /*
+             * val = PEEK(PEEK((arg + X) % 256) + PEEK((arg + X + 1) % 256) * 256)
+             */
+            addressing::Mode::IndirectX => {
+                let arg = self.fetch_byte(bus, self.pc + 1);
+                let ptr_addr = arg.wrapping_add(self.x);
+
+                // Read the two bytes from zero page to form the pointer
+                let lo = self.fetch_byte(bus, ptr_addr as u16) as u16;
+                let hi = self.fetch_byte(bus, ptr_addr.wrapping_add(1) as u16) as u16;
+
+                let addr_ptr = lo | (hi << 8);
+                (addr_ptr, 2, false)
+            }
+            /*
+            val = PEEK(PEEK(arg) + PEEK((arg + 1) % 256) * 256 + Y)
+            */
+            addressing::Mode::IndirectY | addressing::Mode::IndirectYWithCross => {
+                let arg = self.fetch_byte(bus, self.pc + 1);
+                let lo = self.fetch_byte(bus, arg as u16) as u16;
+                let hi = self.fetch_byte(bus, arg.wrapping_add(1) as u16) as u16;
+
+                let addr_ptr = lo | (hi << 8);
+                let (res, carry) = self.page_cross_add(addr_ptr, self.y as u16);
+
+                (res as u16, 2, carry)
+            }
+            _ => (0xBEEF, 0, false),
+        };
+        (operand, offset, page_cross)
     }
 
     #[inline]
@@ -250,7 +294,83 @@ impl Cpu {
 
         (res, carry)
     }
+}
 
+/* -------
+ *  Debug
+ * -------
+ */
+#[cfg(feature = "debug")]
+impl Cpu {
+    pub fn take_snapshot(&self) -> CpuSnapshot {
+        CpuSnapshot {
+            a: self.a,
+            x: self.x,
+            y: self.y,
+            pc: self.pc,
+            sp: self.sp,
+            status: self.status,
+            instr: self.current_instr,
+        }
+    }
+
+    pub fn restore_snapshot(&mut self, snap: CpuSnapshot) {
+        self.a = snap.a
+    }
+
+    fn build_instr_info(&self, op: &Decoded, bus: &mut Bus) -> InstrInfo {
+        let mut opcode = [op.code, 0, 0];
+        if op.offset >= 2 {
+            opcode[1] = self.fetch_byte(bus, self.pc.wrapping_add(1));
+        }
+        if op.offset >= 3 {
+            opcode[2] = self.fetch_byte(bus, self.pc.wrapping_add(2));
+        }
+
+        InstrInfo {
+            pc: self.pc, // still the instruction's address here
+            opcode,
+            len: op.offset,
+            mnemonic: op.inst.name, // Op::name exists under `debug`
+        }
+    }
+}
+
+#[cfg(feature = "debug")]
+#[derive(Clone, Copy)]
+pub struct InstrInfo {
+    pub pc: u16,
+    pub opcode: [u8; 3],
+    pub len: u8,
+    pub mnemonic: &'static str,
+}
+
+#[cfg(feature = "debug")]
+impl InstrInfo {
+    const NONE: Self = Self {
+        pc: 0,
+        opcode: [0; 3],
+        len: 0,
+        mnemonic: "---",
+    };
+}
+
+#[cfg(feature = "debug")]
+#[derive(Clone, Copy)]
+pub struct CpuSnapshot {
+    pub a: u8,
+    pub x: u8,
+    pub y: u8,
+    pub pc: u16,
+    pub sp: u8,
+    pub status: Status,
+    pub instr: InstrInfo,
+}
+
+/*
+ * CPU Instruction functions
+ */
+impl Cpu {
     /* ----------------------
      * INSTRUCTIONS
      * ----------------------
@@ -265,9 +385,8 @@ impl Cpu {
         self.unof
     }
 
-    #[inline]
+    #[inline] //TODO review this function
     fn brk(&mut self, bus: &mut Bus, _operand: u16) {
-        // `step` already added 1 (past the opcode). Hardware pushes the address
         // after BRK's padding byte, i.e. BRK_addr + 2 == pc + 1.
         let ret = self.pc.wrapping_add(1);
         self.push_stack(bus, (ret >> 8) as u8);
@@ -694,63 +813,4 @@ impl Cpu {
         self.a = self.y;
         self.set_zn(self.a);
     }
-}
-
-/* -------
- *  Debug
- * -------
- */
-#[cfg(debug_assertions)]
-impl Cpu {
-    pub fn register_observer(&mut self, obs: Box<dyn CpuObserver>) {
-        self.observers.push(obs);
-    }
-
-    fn take_snapshot(&mut self, op: Op, bus: &mut Bus, opcode: usize, offset: u8) {
-        let opcode_bytes: Vec<u8> = match offset {
-            1 => vec![opcode as u8],
-            2 => vec![opcode as u8, self.fetch_byte(bus, self.pc + 1)],
-            3 => vec![
-                opcode as u8,
-                self.fetch_byte(bus, self.pc + 1),
-                self.fetch_byte(bus, self.pc + 2),
-            ],
-            _ => vec![opcode as u8],
-        };
-
-        let snap: CpuSnapshot = CpuSnapshot {
-            a: (self.a),
-            x: (self.x),
-            y: (self.y),
-            pc: (self.pc),
-            sp: (self.sp),
-            status: (self.status),
-            cycles_taken: (self.cycles),
-            current_op: op.name,
-            opcode_bytes: opcode_bytes,
-        };
-        for observer in &mut self.observers {
-            observer.update(snap.clone());
-        }
-    }
-}
-
-#[cfg(debug_assertions)]
-#[derive(Clone)]
-pub struct CpuSnapshot {
-    pub a: u8,
-    pub x: u8,
-    pub y: u8,
-    pub pc: u16,
-    pub sp: u8,
-    pub status: Status,
-    //Timing
-    pub cycles_taken: u64,
-    pub current_op: &'static str,
-    pub opcode_bytes: Vec<u8>,
-}
-
-#[cfg(debug_assertions)]
-pub trait CpuObserver {
-    fn update(&mut self, snap: CpuSnapshot);
 }

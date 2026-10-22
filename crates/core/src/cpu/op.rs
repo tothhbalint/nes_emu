@@ -18,7 +18,7 @@ pub(super) const fn build_variants<const N: usize>(
             exec,
             addr_mode,
             base_cycles,
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "debug")]
             name,
         };
         i += 1;
@@ -33,7 +33,7 @@ pub(super) struct Op {
     pub(super) exec: InstrFn,
     pub(super) addr_mode: Mode,
     pub(super) base_cycles: u8,
-    #[cfg(debug_assertions)]
+    #[cfg(feature = "debug")]
     pub name: &'static str,
 }
 
@@ -54,7 +54,7 @@ pub(super) const fn make_op_table() -> [Op; 256] {
         exec: Cpu::unoff,
         addr_mode: Mode::Implied,
         base_cycles: 0,
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "debug")]
         name: "U",
     }; 256];
 
@@ -73,7 +73,7 @@ pub(super) const fn make_op_table() -> [Op; 256] {
         exec: Cpu::nop,
         addr_mode: Mode::Implied,
         base_cycles: 2,
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "debug")]
         name: "NOP",
     };
 
