@@ -47,6 +47,7 @@ mod jump_instructions;
 mod shift_instructions;
 mod stack_instructions;
 mod transfer_instructions;
+mod unofficial_instructions;
 
 // Build lookup table
 pub(super) const fn make_op_table() -> [Op; 256] {
@@ -68,6 +69,7 @@ pub(super) const fn make_op_table() -> [Op; 256] {
     jump_instructions::build(&mut table);
     stack_instructions::build(&mut table);
     flags_instructions::build(&mut table);
+    unofficial_instructions::build(&mut table);
 
     table[0xEA] = Op {
         exec: Cpu::nop,

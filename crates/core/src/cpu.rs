@@ -1,6 +1,6 @@
-mod op;
-
 use std::ops::RangeBounds;
+
+mod op;
 
 use crate::{bus::Bus, cpu::op::make_op_table};
 use bitflags::bitflags;
@@ -313,6 +313,47 @@ impl Cpu {
     }
 
     #[inline]
+    fn slo(&mut self, bus: &mut Bus, operand: u16) {
+        self.asl(bus, operand);
+        self.ora(bus, operand);
+    }
+
+    #[inline]
+    fn alr(&mut self, bus: &mut Bus, operand: u16) {
+        self.and(bus, operand);
+        self.lsr_a(bus, operand);
+    }
+
+    #[inline]
+    fn anc(&mut self, bus: &mut Bus, operand: u16) {
+        self.and(bus, operand);
+
+        self.status.set(Status::C, self.status.contains(Status::N));
+    }
+
+    #[inline]
+    fn arr(&mut self, bus: &mut Bus, operand: u16) {
+        let memory = self.fetch_byte(bus, operand);
+        let result = (self.a & memory) >> 1 | ((self.status.contains(Status::C) as u8) << 7);
+
+        self.a = result;
+        self.set_zn(result);
+        self.status.set(Status::C, result & 0x40 != 0);
+        self.status
+            .set(Status::V, (result ^ (result << 1)) & 0x40 != 0);
+    }
+
+    #[inline]
+    fn axs(&mut self, bus: &mut Bus, operand: u16) {
+        let memory = self.fetch_byte(bus, operand);
+        let and_val = (self.a & self.x);
+        let result = and_val.wrapping_sub(memory);
+        self.status.set(Status::C, and_val >= memory);
+        self.set_zn(result);
+        self.x = result;
+    }
+
+    #[inline]
     fn bcc(&mut self, bus: &mut Bus, operand: u16) {
         if !self.status.contains(Status::C) {
             self.cycles_left += 1;
@@ -434,6 +475,13 @@ impl Cpu {
 
         self.set_zn(memory);
     }
+
+    #[inline]
+    fn dcp(&mut self, bus: &mut Bus, operand: u16) {
+        self.dec(bus, operand);
+        self.cmp(bus, operand);
+    }
+
     #[inline]
     fn dex(&mut self, _bus: &mut Bus, _operand: u16) {
         self.x = self.x.wrapping_sub(1);
@@ -461,6 +509,12 @@ impl Cpu {
         self.set_zn(memory);
     }
     #[inline]
+    fn isc(&mut self, bus: &mut Bus, operand: u16) {
+        self.inc(bus, operand);
+        self.sbc(bus, operand);
+    }
+
+    #[inline]
     fn inx(&mut self, _bus: &mut Bus, _operand: u16) {
         self.x = self.x.wrapping_add(1);
         self.set_zn(self.x);
@@ -484,11 +538,25 @@ impl Cpu {
         self.push_stack(bus, lo);
         self.pc = operand;
     }
+
     #[inline]
     fn lda(&mut self, bus: &mut Bus, operand: u16) {
         self.a = self.fetch_byte(bus, operand);
         self.set_zn(self.a);
     }
+
+    #[inline]
+    fn lax(&mut self, bus: &mut Bus, operand: u16) {
+        self.lda(bus, operand);
+        self.tax(bus, operand);
+    }
+
+    #[inline]
+    fn lxa(&mut self, bus: &mut Bus, operand: u16) {
+        self.lda(bus, operand);
+        self.tax(bus, operand);
+    }
+
     #[inline]
     fn ldx(&mut self, bus: &mut Bus, operand: u16) {
         self.x = self.fetch_byte(bus, operand);
@@ -499,7 +567,7 @@ impl Cpu {
         self.y = self.fetch_byte(bus, operand);
         self.set_zn(self.y);
     }
-
+    #[inline]
     fn lsr_a(&mut self, _bus: &mut Bus, _operand: u16) {
         let mut memory = self.a;
         self.status.set(Status::C, memory & 0x1 != 0);
@@ -520,6 +588,12 @@ impl Cpu {
         self.status.remove(Status::N);
 
         bus.write_byte(operand, memory);
+    }
+
+    #[inline]
+    fn sre(&mut self, bus: &mut Bus, operand: u16) {
+        self.lsr(bus, operand);
+        self.eor(bus, operand);
     }
 
     #[inline]
@@ -577,6 +651,12 @@ impl Cpu {
     }
 
     #[inline]
+    fn rla(&mut self, bus: &mut Bus, operand: u16) {
+        self.rol(bus, operand);
+        self.and(bus, operand);
+    }
+
+    #[inline]
     fn ror_a(&mut self, _bus: &mut Bus, _operand: u16) {
         let mut memory = self.a;
 
@@ -596,6 +676,12 @@ impl Cpu {
         self.status.set(Status::C, memory & 0x1 != 0);
 
         bus.write_byte(operand, result);
+    }
+
+    #[inline]
+    fn rra(&mut self, bus: &mut Bus, operand: u16) {
+        self.ror(bus, operand);
+        self.adc(bus, operand);
     }
 
     #[inline]
@@ -647,14 +733,48 @@ impl Cpu {
     fn sta(&mut self, bus: &mut Bus, operand: u16) {
         bus.write_byte(operand, self.a);
     }
+
     #[inline]
     fn stx(&mut self, bus: &mut Bus, operand: u16) {
         bus.write_byte(operand, self.x);
     }
+
+    #[inline]
+    fn store_unstable(&mut self, bus: &mut Bus, base: u16, addr: u16, reg: u8) {
+        let hi = (base >> 8) as u8;
+        let value = reg & hi.wrapping_add(1);
+
+        let target = if (base & 0xFF00) != (addr & 0xFF00) {
+            (addr & 0x00FF) | ((value as u16) << 8)
+        } else {
+            addr
+        };
+
+        bus.write_byte(target, value);
+    }
+
+    #[inline]
+    fn shx(&mut self, bus: &mut Bus, operand: u16) {
+        let base = operand.wrapping_sub(self.x as u16);
+        self.store_unstable(bus, base, operand, self.x);
+    }
+
+    #[inline]
+    fn shy(&mut self, bus: &mut Bus, operand: u16) {
+        let base = operand.wrapping_sub(self.y as u16);
+        self.store_unstable(bus, base, operand, self.y);
+    }
+
+    #[inline]
+    fn sax(&mut self, bus: &mut Bus, operand: u16) {
+        bus.write_byte(operand, self.a & self.x);
+    }
+
     #[inline]
     fn sty(&mut self, bus: &mut Bus, operand: u16) {
         bus.write_byte(operand, self.y);
     }
+
     #[inline]
     fn tax(&mut self, _bus: &mut Bus, _operand: u16) {
         self.x = self.a;
