@@ -24,18 +24,23 @@ class Backend:
     """Thin adapter over the current Rust bridge surface.
 
     Exposed by ``PyNes`` today: ``load``, ``step`` (one CPU clock cycle),
-    ``snap``, and ``run_until_breakpoint``.
+    ``snap``, ``disassemble_forward``, and ``run_until_breakpoint``.
     """
 
     def __init__(self) -> None:
         from emulator import Nes
 
         self.nes = Nes()
+        self.loaded = False
 
     def load(self, path: str) -> None:
+        self.loaded = False
         self.nes.load(path)
+        self.loaded = True
 
-    def snap(self) -> dict:
+    def snap(self) -> dict | None:
+        if not self.loaded:
+            return None
         s = self.nes.snap()
         return {
             "a": s.a,
@@ -44,17 +49,23 @@ class Backend:
             "pc": s.pc,
             "sp": s.sp,
             "status": s.status,
-            "opcode": list(s.opcode),
-            "len": s.len,
-            "mnemonic": s.mnemonic,
         }
 
+    def disassemble_forward(self, start: int, count: int):
+        if not self.loaded:
+            return []
+        return self.nes.disassemble_forward(start, count)
+
     def tick(self) -> None:
+        if not self.loaded:
+            return
         # The bridge's ``step`` advances a single CPU clock cycle.
         self.nes.step()
 
     def step_instruction(self, limit: int = 4096) -> None:
         """Tick until the next instruction has executed (PC moves)."""
+        if not self.loaded:
+            return
         before = self.nes.snap().pc
         for _ in range(limit):
             self.nes.step()
@@ -75,6 +86,8 @@ FLAG_ORDER = [
 
 
 class MainWindow(QMainWindow):
+    DISASM_LINES = 128
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("NES CPU Test")
@@ -110,6 +123,9 @@ class MainWindow(QMainWindow):
         self.cycles_per_tick = QSpinBox()
         self.cycles_per_tick.setRange(1, 1_000_000)
         self.cycles_per_tick.setValue(2000)
+
+        self.step_btn.setEnabled(False)
+        self.run_btn.setEnabled(False)
 
         self.load_btn.clicked.connect(self.on_load)
         self.step_btn.clicked.connect(self.on_step)
@@ -156,7 +172,7 @@ class MainWindow(QMainWindow):
         self.disasm = QPlainTextEdit()
         self.disasm.setReadOnly(True)
         self.disasm.setFont(mono)
-        self.disasm.setPlaceholderText("last executed instruction")
+        self.disasm.setPlaceholderText("disassembly from PC")
 
         self.mem = QPlainTextEdit()
         self.mem.setReadOnly(True)
@@ -186,15 +202,33 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(
             self, "Open ROM", "", "NES ROM (*.nes)"
         )
-        if path:
+        if not path:
+            return
+
+        try:
             self.backend.load(path)
-            self.refresh()
+        except Exception as exc:  # noqa: BLE001 - surface load errors in the view
+            self.step_btn.setEnabled(False)
+            self.run_btn.setEnabled(False)
+            self.disasm.setPlainText(f"failed to load ROM: {exc}")
+            return
+
+        self.running = False
+        self.run_btn.setText("Run")
+        self.timer.stop()
+        self.step_btn.setEnabled(True)
+        self.run_btn.setEnabled(True)
+        self.refresh()
 
     def on_step(self) -> None:
+        if not self.backend.loaded:
+            return
         self.backend.step_instruction()
         self.refresh()
 
     def toggle_run(self) -> None:
+        if not self.backend.loaded:
+            return
         self.running = not self.running
         self.run_btn.setText("Pause" if self.running else "Run")
         if self.running:
@@ -203,13 +237,23 @@ class MainWindow(QMainWindow):
             self.timer.stop()
 
     def on_tick(self) -> None:
+        if not self.backend.loaded:
+            self.timer.stop()
+            return
         for _ in range(self.cycles_per_tick.value()):
             self.backend.tick()
         self.refresh()
 
     # --- views ---
     def refresh(self) -> None:
+        if not self.backend.loaded:
+            self.clear_views()
+            return
+
         s = self.backend.snap()
+        if s is None:
+            self.clear_views()
+            return
 
         self.reg_labels["A"].setText(f"{s['a']:02X}")
         self.reg_labels["X"].setText(f"{s['x']:02X}")
@@ -224,12 +268,24 @@ class MainWindow(QMainWindow):
         )
         self.reg_labels["FLAGS"].setText(flags)
 
-        self.update_disasm(s)
+        self.update_disasm(s["pc"])
 
-    def update_disasm(self, s: dict) -> None:
-        n = max(int(s["len"]), 1)
-        raw = " ".join(f"{b:02X}" for b in s["opcode"][:n])
-        self.disasm.setPlainText(f"{raw:<9} {s['mnemonic']}")
+    def clear_views(self) -> None:
+        for lbl in self.reg_labels.values():
+            lbl.setText("--")
+        self.disasm.setPlainText("(load a ROM to disassemble)")
+        self.mem.setPlainText("(load a ROM)")
+
+    def update_disasm(self, pc: int) -> None:
+        if not self.backend.loaded:
+            return
+        entries = self.backend.disassemble_forward(pc, self.DISASM_LINES)
+        rendered = []
+        for e in entries:
+            marker = ">" if e.pc == pc else " "
+            hexes = " ".join(f"{b:02X}" for b in e.opcode)
+            rendered.append(f"{marker} {e.pc:04X}  {hexes:<9} {e.mnemonic}")
+        self.disasm.setPlainText("\n".join(rendered) or "(no disassembly)")
 
 
 def main() -> None:

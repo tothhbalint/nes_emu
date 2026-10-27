@@ -1,5 +1,5 @@
 #[cfg(feature = "debug")]
-use crate::cpu::CpuSnapshot;
+use crate::cpu::{CpuSnapshot, DisasmEntry};
 use crate::{bus::Bus, cart::Cartridge, cpu::Cpu};
 #[cfg(feature = "debug")]
 use std::io::{BufWriter, Write};
@@ -210,6 +210,10 @@ impl Nes {
      */
     pub fn snap(&mut self) -> CpuSnapshot {
         self.cpu.take_snapshot()
+    }
+
+    pub fn disassemble_forward(&self, _start: u16, count: usize) -> Vec<DisasmEntry> {
+        self.cpu.disassemble_forward(&self.bus, count)
     }
 }
 

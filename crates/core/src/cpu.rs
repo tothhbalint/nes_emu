@@ -1,10 +1,8 @@
+mod disass;
 mod op;
-
-use std::ops::RangeBounds;
 
 use crate::{bus::Bus, cpu::op::make_op_table};
 use bitflags::bitflags;
-use bitflags::Flags;
 use op::addressing;
 use op::Op;
 
@@ -44,8 +42,6 @@ pub struct Cpu {
     cycles_left: u8,
     cycles: u64,
     unof: bool, //TODO remove this
-    #[cfg(feature = "debug")]
-    current_instr: InstrInfo,
 }
 
 impl Cpu {
@@ -60,8 +56,6 @@ impl Cpu {
             cycles: 7,
             cycles_left: 0,
             unof: false,
-            #[cfg(feature = "debug")]
-            current_instr: InstrInfo::NONE,
         }
     }
 
@@ -120,11 +114,6 @@ impl Cpu {
 
         let op = self.fetch_current_op(bus);
 
-        #[cfg(feature = "debug")]
-        {
-            self.current_instr = self.build_instr_info(&op, bus);
-        }
-
         self.cycles_left = op.inst.base_cycles;
 
         if op.page_cross
@@ -146,7 +135,7 @@ impl Cpu {
     fn fetch_current_op(&self, bus: &mut Bus) -> Decoded {
         let opcode = self.fetch_byte(bus, self.pc);
 
-        let op = OP_LOOKUP[opcode as usize];
+        let op = disass::decode_op(opcode as usize);
 
         let (operand, offset, page_cross) = self.decode_addressing(op, bus);
 
@@ -257,7 +246,7 @@ impl Cpu {
     }
 
     #[inline]
-    fn fetch_byte(&self, bus: &mut Bus, addr: u16) -> u8 {
+    fn fetch_byte(&self, bus: &Bus, addr: u16) -> u8 {
         bus.read(addr)
     }
 
@@ -310,15 +299,27 @@ impl Cpu {
             pc: self.pc,
             sp: self.sp,
             status: self.status,
-            instr: self.current_instr,
         }
+    }
+
+    pub fn disassemble_forward(&self, bus: &Bus, len: usize) -> Vec<DisasmEntry> {
+        let mut addr = self.pc();
+        let mut out: Vec<DisasmEntry> = vec![];
+        for _ in 0..len {
+            let entry = disass::disass_at_address(bus, addr);
+            out.push(entry);
+
+            addr += 1;
+        }
+
+        out
     }
 
     pub fn restore_snapshot(&mut self, snap: CpuSnapshot) {
         self.a = snap.a
     }
 
-    fn build_instr_info(&self, op: &Decoded, bus: &mut Bus) -> InstrInfo {
+    fn build_instr_info(&self, op: &Decoded, bus: &mut Bus) -> DisasmEntry {
         let mut opcode = [op.code, 0, 0];
         if op.offset >= 2 {
             opcode[1] = self.fetch_byte(bus, self.pc.wrapping_add(1));
@@ -327,7 +328,7 @@ impl Cpu {
             opcode[2] = self.fetch_byte(bus, self.pc.wrapping_add(2));
         }
 
-        InstrInfo {
+        DisasmEntry {
             pc: self.pc, // still the instruction's address here
             opcode,
             len: op.offset,
@@ -338,7 +339,7 @@ impl Cpu {
 
 #[cfg(feature = "debug")]
 #[derive(Clone, Copy)]
-pub struct InstrInfo {
+pub struct DisasmEntry {
     pub pc: u16,
     pub opcode: [u8; 3],
     pub len: u8,
@@ -346,7 +347,7 @@ pub struct InstrInfo {
 }
 
 #[cfg(feature = "debug")]
-impl InstrInfo {
+impl DisasmEntry {
     const NONE: Self = Self {
         pc: 0,
         opcode: [0; 3],
@@ -364,7 +365,6 @@ pub struct CpuSnapshot {
     pub pc: u16,
     pub sp: u8,
     pub status: Status,
-    pub instr: InstrInfo,
 }
 
 /*
