@@ -1,5 +1,6 @@
 use std::ops::RangeBounds;
 
+mod disass;
 mod op;
 
 use crate::{bus::Bus, cpu::op::make_op_table};
