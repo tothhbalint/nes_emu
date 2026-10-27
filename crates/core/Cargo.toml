@@ -6,3 +6,6 @@ edition.workspace = true
 [dependencies]
 bitflags.workspace = true
 thiserror.workspace = true
+
+[features]
+debug = []

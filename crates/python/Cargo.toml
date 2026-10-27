@@ -12,5 +12,5 @@ default = []
 extension-module = ["pyo3/extension-module"]   # maturin enables this
 
 [dependencies]
-emulator-core.workspace = true
+emulator-core=  {workspace = true, features = ["debug"]}
 pyo3 = { workspace = true }
