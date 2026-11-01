@@ -6,7 +6,6 @@
 use super::DisasmEntry;
 
 use super::{op::addressing::Mode, Op, OP_LOOKUP};
-use crate::bus::Bus;
 
 pub(super) fn decode_op(opcode: usize) -> Op {
     OP_LOOKUP[opcode]

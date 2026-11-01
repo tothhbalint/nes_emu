@@ -88,11 +88,11 @@ impl Cpu {
         if self.pc == 0xFFFF {
             return;
         }
-        while (self.cycles_left != 0) {
+        while self.cycles_left != 0 {
             self.tick(bus);
         }
         self.tick(bus);
-        while (self.cycles_left != 0) {
+        while self.cycles_left != 0 {
             self.tick(bus);
         }
     }
@@ -465,7 +465,7 @@ impl Cpu {
     #[inline]
     fn axs(&mut self, bus: &mut Bus, operand: u16) {
         let memory = self.fetch_byte(bus, operand);
-        let and_val = (self.a & self.x);
+        let and_val = self.a & self.x;
         let result = and_val.wrapping_sub(memory);
         self.status.set(Status::C, and_val >= memory);
         self.set_zn(result);

@@ -9,7 +9,7 @@ type OpTable = [Op; 256];
 pub(super) const fn build_variants<const N: usize>(
     table: &mut OpTable,
     variants: InstrVariants<N>,
-    name: &'static str,
+    _name: &'static str,
 ) {
     let mut i = 0;
     while i < N {
