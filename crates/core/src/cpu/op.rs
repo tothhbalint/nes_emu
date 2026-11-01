@@ -52,11 +52,11 @@ mod unofficial_instructions;
 // Build lookup table
 pub(super) const fn make_op_table() -> [Op; 256] {
     let mut table = [Op {
-        exec: Cpu::unoff,
+        exec: Cpu::nop,
         addr_mode: Mode::Implied,
-        base_cycles: 0,
+        base_cycles: 2,
         #[cfg(feature = "debug")]
-        name: "U",
+        name: "NOP",
     }; 256];
 
     access_instructions::build(&mut table);

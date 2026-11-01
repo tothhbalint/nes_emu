@@ -2,7 +2,10 @@
  * This file contains helper functions for decoding operations at given addresses
  */
 
-use super::{op::addressing::Mode, DisasmEntry, Op, OP_LOOKUP};
+#[cfg(feature = "debug")]
+use super::DisasmEntry;
+
+use super::{op::addressing::Mode, Op, OP_LOOKUP};
 use crate::bus::Bus;
 
 pub(super) fn decode_op(opcode: usize) -> Op {

@@ -64,24 +64,7 @@ pub struct TestResult {
 }
 
 impl Nes {
-    pub fn run_nestest(&mut self) {
-        self.load_cart("tests/roms/nestest.nes")
-            .expect("failed to load nestest.nes");
-
-        self.cpu.jump_to(0xC000);
-
-        while !self.cpu.is_unoff() {
-            // stop at the first unofficial opcode
-            self.cpu.tick(&mut self.bus);
-        }
-    }
-
-    pub fn run_test_rom(
-        &mut self,
-        rom: &'static str,
-        max_cycles: usize,
-        test_unoff: bool,
-    ) -> TestResult {
+    pub fn run_test_rom(&mut self, rom: &'static str, max_cycles: usize) -> TestResult {
         self.load_cart(rom).unwrap();
 
         self.cpu.reset(&mut self.bus);
@@ -94,13 +77,6 @@ impl Nes {
             cycles += 1;
 
             let status = self.bus.read(0x6000);
-
-            if !test_unoff && self.cpu.is_unoff() {
-                return TestResult {
-                    status: 0,
-                    output: b"Reached unofficial".to_vec(),
-                };
-            }
 
             match status {
                 0x80 if !started => started = true,    // test signalled "started"
@@ -193,9 +169,20 @@ impl CpuLogger {
 
 #[cfg(feature = "debug")]
 impl Nes {
-    pub fn run_until_breakpoint(&mut self, addr: u16) {
-        while self.cpu.pc() != addr {
-            self.cpu.tick(&mut self.bus);
+    /// Executes instructions until the PC lands on one of `breakpoints`,
+    /// returning the address that was hit. An empty list returns immediately,
+    /// since there is nothing to run towards.
+    pub fn run_until_breakpoints(&mut self, breakpoints: &[u16]) -> Option<u16> {
+        if breakpoints.is_empty() {
+            return None;
+        }
+
+        loop {
+            self.step();
+            let pc = self.cpu.pc();
+            if breakpoints.contains(&pc) {
+                return Some(pc);
+            }
         }
     }
 
@@ -235,5 +222,52 @@ impl CpuDebugger {
     #[inline]
     pub fn snap(&self) -> CpuSnapshot {
         self.snapshots[0]
+    }
+}
+
+/// Outcome of an automated nestest run.
+pub struct NestestResult {
+    /// Reached the final RTS at $C66E (i.e. the whole suite ran).
+    pub finished: bool,
+    /// Error code the ROM wrote to zero page. Both zero means success.
+    pub error_lo: u8,
+    pub error_hi: u8,
+    pub steps: usize,
+    pub pc: u16,
+    pub registers: String,
+}
+
+impl NestestResult {
+    pub fn passed(&self) -> bool {
+        self.finished && self.error_lo == 0 && self.error_hi == 0
+    }
+}
+
+impl Nes {
+    /// Runs nestest in automated mode (starting at $C000) and reports what it
+    /// wrote to zero page. Stops at the final RTS at $C66E, or on the step cap.
+    pub fn run_nestest(&mut self) -> NestestResult {
+        const MAX_STEPS: usize = 50000; // reference run is 8991 instructions
+
+        self.load_cart("tests/roms/nestest.nes")
+            .expect("failed to load nestest.nes");
+
+        // Power-on state already matches the trace: pc=$C000, sp=$FD, P=$24.
+        self.cpu.jump_to(0xC000);
+
+        let mut steps = 0;
+        while self.cpu.pc() != 0xC66E && steps < MAX_STEPS {
+            self.step();
+            steps += 1;
+        }
+
+        NestestResult {
+            finished: self.cpu.pc() == 0xC66E,
+            error_lo: self.bus.read(0x02),
+            error_hi: self.bus.read(0x03),
+            steps,
+            pc: self.cpu.pc(),
+            registers: self.cpu.debug_registers(),
+        }
     }
 }

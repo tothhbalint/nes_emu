@@ -67,8 +67,9 @@ impl PyNes {
             .collect()
     }
 
-    fn run_until_breakpoint(&mut self, addr: u16) {
-        self.inner.run_until_breakpoint(addr);
+    /// Run until the PC hits one of `breakpoints`, returning that address.
+    fn run_until_breakpoints(&mut self, breakpoints: Vec<u16>) -> Option<u16> {
+        self.inner.run_until_breakpoints(&breakpoints)
     }
 }
 

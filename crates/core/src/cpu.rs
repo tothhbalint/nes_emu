@@ -1,5 +1,3 @@
-use std::ops::RangeBounds;
-
 mod disass;
 mod op;
 
@@ -43,7 +41,6 @@ pub struct Cpu {
     //Timing
     cycles_left: u8,
     cycles: u64,
-    unof: bool, //TODO remove this
 }
 
 impl Cpu {
@@ -57,7 +54,6 @@ impl Cpu {
             status: Status::U.union(Status::I),
             cycles: 7,
             cycles_left: 0,
-            unof: false,
         }
     }
 
@@ -378,14 +374,6 @@ impl Cpu {
      * ----------------------
      */
     fn nop(&mut self, _bus: &mut Bus, _operand: u16) {}
-
-    fn unoff(&mut self, _bus: &mut Bus, _operand: u16) {
-        self.unof = true;
-    }
-
-    pub fn is_unoff(&self) -> bool {
-        self.unof
-    }
 
     #[inline] //TODO review this function
     fn brk(&mut self, bus: &mut Bus, _operand: u16) {

@@ -1,6 +1,6 @@
 import sys
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QPlainTextEdit,
     QPushButton,
@@ -23,8 +24,8 @@ from PySide6.QtWidgets import (
 class Backend:
     """Thin adapter over the current Rust bridge surface.
 
-    Exposed by ``PyNes`` today: ``load``, ``step`` (one CPU clock cycle),
-    ``snap``, ``disassemble_forward``, and ``run_until_breakpoint``.
+    Exposed by ``PyNes`` today: ``load``, ``step`` (one instruction),
+    ``snap``, ``disassemble_forward``, and ``run_until_breakpoints``.
     """
 
     def __init__(self) -> None:
@@ -56,21 +57,26 @@ class Backend:
             return []
         return self.nes.disassemble_forward(start, count)
 
-    def tick(self) -> None:
+    def step_instruction(self) -> None:
         if not self.loaded:
             return
-        # The bridge's ``step`` advances a single CPU clock cycle.
         self.nes.step()
 
-    def step_instruction(self, limit: int = 4096) -> None:
-        """Tick until the next instruction has executed (PC moves)."""
+    def run_until_breakpoints(self, breakpoints) -> int | None:
         if not self.loaded:
-            return
-        before = self.nes.snap().pc
-        for _ in range(limit):
-            self.nes.step()
-            if self.nes.snap().pc != before:
-                return
+            return None
+        return self.nes.run_until_breakpoints(sorted(breakpoints))
+
+
+class DisasmView(QPlainTextEdit):
+    """Read-only disassembly; double-clicking a line toggles a breakpoint."""
+
+    line_double_clicked = Signal(int)
+
+    def mouseDoubleClickEvent(self, event):
+        cursor = self.cursorForPosition(event.position().toPoint())
+        self.line_double_clicked.emit(cursor.blockNumber())
+        event.accept()
 
 
 FLAG_ORDER = [
@@ -94,6 +100,8 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(720, 480)
         self.backend = Backend()
         self.running = False
+        self.breakpoints: set[int] = set()
+        self.disasm_entries = []
 
         mono = QFont("Menlo")
         mono.setStyleHint(QFont.StyleHint.Monospace)
@@ -120,25 +128,49 @@ class MainWindow(QMainWindow):
         self.load_btn = QPushButton("Load ROM…")
         self.step_btn = QPushButton("Step")
         self.run_btn = QPushButton("Run")
-        self.cycles_per_tick = QSpinBox()
-        self.cycles_per_tick.setRange(1, 1_000_000)
-        self.cycles_per_tick.setValue(2000)
+        self.bp_addr = QLineEdit()
+        self.bp_addr.setPlaceholderText("addr")
+        self.bp_addr.setMaximumWidth(80)
+        self.add_bp_btn = QPushButton("Add")
+        self.bp_at_pc_btn = QPushButton("At PC")
+        self.clear_bps_btn = QPushButton("Clear breakpoints")
+        self.status = QLabel("idle")
+        self.step_budget = QSpinBox()
+        self.step_budget.setRange(1, 1_000_000)
+        self.step_budget.setValue(2000)
+        self.step_budget.setToolTip("Instructions executed per UI tick while running")
+        self.bp_addr.setToolTip("Hexadecimal address, e.g. C6BD")
+        self.bp_at_pc_btn.setToolTip("Set a breakpoint at the current PC")
 
         self.step_btn.setEnabled(False)
         self.run_btn.setEnabled(False)
+        self.bp_addr.setEnabled(False)
+        self.add_bp_btn.setEnabled(False)
+        self.bp_at_pc_btn.setEnabled(False)
+        self.clear_bps_btn.setEnabled(False)
 
         self.load_btn.clicked.connect(self.on_load)
         self.step_btn.clicked.connect(self.on_step)
         self.run_btn.clicked.connect(self.toggle_run)
+        self.bp_addr.returnPressed.connect(self.on_add_breakpoint)
+        self.add_bp_btn.clicked.connect(self.on_add_breakpoint)
+        self.bp_at_pc_btn.clicked.connect(self.on_break_at_pc)
+        self.clear_bps_btn.clicked.connect(self.on_clear_breakpoints)
 
         controls = QHBoxLayout()
         controls.setSpacing(8)
         controls.addWidget(self.load_btn)
         controls.addWidget(self.step_btn)
         controls.addWidget(self.run_btn)
-        controls.addWidget(QLabel("cycles/frame"))
-        controls.addWidget(self.cycles_per_tick)
-        controls.addStretch(1)
+        controls.addWidget(QLabel("instrs/tick"))
+        controls.addWidget(self.step_budget)
+        controls.addSpacing(16)
+        controls.addWidget(QLabel("bp"))
+        controls.addWidget(self.bp_addr)
+        controls.addWidget(self.add_bp_btn)
+        controls.addWidget(self.bp_at_pc_btn)
+        controls.addWidget(self.clear_bps_btn)
+        controls.addWidget(self.status, 1)
         return controls
 
     def _build_main_splitter(self, mono: QFont) -> QSplitter:
@@ -169,10 +201,13 @@ class MainWindow(QMainWindow):
         cpu_layout.addStretch(1)
 
         # Right: disassembly over memory, resizable vertically.
-        self.disasm = QPlainTextEdit()
+        self.disasm = DisasmView()
         self.disasm.setReadOnly(True)
         self.disasm.setFont(mono)
-        self.disasm.setPlaceholderText("disassembly from PC")
+        self.disasm.setPlaceholderText(
+            "disassembly from PC — double-click a line to toggle a breakpoint"
+        )
+        self.disasm.line_double_clicked.connect(self.on_disasm_double_click)
 
         self.mem = QPlainTextEdit()
         self.mem.setReadOnly(True)
@@ -198,6 +233,12 @@ class MainWindow(QMainWindow):
         return main_split
 
     # --- handlers ---
+    def pause(self, message: str = "paused") -> None:
+        self.running = False
+        self.timer.stop()
+        self.run_btn.setText("Run")
+        self.status.setText(message)
+
     def on_load(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self, "Open ROM", "", "NES ROM (*.nes)"
@@ -208,44 +249,115 @@ class MainWindow(QMainWindow):
         try:
             self.backend.load(path)
         except Exception as exc:  # noqa: BLE001 - surface load errors in the view
+            self.pause("load failed")
             self.step_btn.setEnabled(False)
             self.run_btn.setEnabled(False)
+            self.bp_addr.setEnabled(False)
+            self.add_bp_btn.setEnabled(False)
+            self.bp_at_pc_btn.setEnabled(False)
+            self.clear_bps_btn.setEnabled(False)
             self.disasm.setPlainText(f"failed to load ROM: {exc}")
             return
 
-        self.running = False
-        self.run_btn.setText("Run")
-        self.timer.stop()
+        self.breakpoints.clear()
+        self.pause("loaded")
         self.step_btn.setEnabled(True)
         self.run_btn.setEnabled(True)
+        self.bp_addr.setEnabled(True)
+        self.add_bp_btn.setEnabled(True)
+        self.bp_at_pc_btn.setEnabled(True)
+        self.clear_bps_btn.setEnabled(True)
         self.refresh()
 
     def on_step(self) -> None:
         if not self.backend.loaded:
             return
+        self.pause("stepped")
         self.backend.step_instruction()
         self.refresh()
 
     def toggle_run(self) -> None:
         if not self.backend.loaded:
             return
-        self.running = not self.running
-        self.run_btn.setText("Pause" if self.running else "Run")
         if self.running:
-            self.timer.start()
-        else:
-            self.timer.stop()
+            self.pause("paused")
+            return
+
+        self.running = True
+        self.run_btn.setText("Pause")
+        self.status.setText("running")
+        self.refresh()
+        self.timer.start()
 
     def on_tick(self) -> None:
         if not self.backend.loaded:
-            self.timer.stop()
+            self.pause("not loaded")
             return
-        for _ in range(self.cycles_per_tick.value()):
-            self.backend.tick()
+
+        # With breakpoints armed, the bridge runs synchronously until one is hit.
+        if self.breakpoints:
+            hit = self.backend.run_until_breakpoints(self.breakpoints)
+            self.refresh()
+            if hit is not None:
+                self.pause(f"breakpoint at ${hit:04X}")
+            return
+
+        for _ in range(self.step_budget.value()):
+            self.backend.step_instruction()
+        self.refresh()
+
+    def on_disasm_double_click(self, line: int) -> None:
+        if line < 0 or line >= len(self.disasm_entries):
+            return
+        self.toggle_breakpoint(self.disasm_entries[line].pc)
+
+    def on_add_breakpoint(self) -> None:
+        raw = self.bp_addr.text().strip().lower()
+        for prefix in ("$", "0x"):
+            if raw.startswith(prefix):
+                raw = raw[len(prefix):]
+        if not raw:
+            return
+
+        try:
+            addr = int(raw, 16)
+        except ValueError:
+            self.status.setText(f"not a hex address: {self.bp_addr.text()}")
+            return
+        if not 0 <= addr <= 0xFFFF:
+            self.status.setText("address out of range (0000-FFFF)")
+            return
+
+        self.bp_addr.clear()
+        self.toggle_breakpoint(addr, force_add=True)
+
+    def on_break_at_pc(self) -> None:
+        s = self.backend.snap()
+        if s is None:
+            return
+        self.toggle_breakpoint(s["pc"], force_add=True)
+
+    def toggle_breakpoint(self, addr: int, force_add: bool = False) -> None:
+        if addr in self.breakpoints and not force_add:
+            self.breakpoints.remove(addr)
+            self.status.setText(f"breakpoint removed at ${addr:04X}")
+        else:
+            self.breakpoints.add(addr)
+            self.status.setText(f"breakpoint added at ${addr:04X}")
+        self.refresh()
+
+    def on_clear_breakpoints(self) -> None:
+        self.breakpoints.clear()
         self.refresh()
 
     # --- views ---
     def refresh(self) -> None:
+        self.clear_bps_btn.setText(
+            f"Clear breakpoints ({len(self.breakpoints)})"
+            if self.breakpoints
+            else "Clear breakpoints"
+        )
+
         if not self.backend.loaded:
             self.clear_views()
             return
@@ -273,18 +385,25 @@ class MainWindow(QMainWindow):
     def clear_views(self) -> None:
         for lbl in self.reg_labels.values():
             lbl.setText("--")
+        self.disasm_entries = []
         self.disasm.setPlainText("(load a ROM to disassemble)")
         self.mem.setPlainText("(load a ROM)")
 
     def update_disasm(self, pc: int) -> None:
         if not self.backend.loaded:
+            self.disasm_entries = []
             return
+
         entries = self.backend.disassemble_forward(pc, self.DISASM_LINES)
+        self.disasm_entries = list(entries)
+
         rendered = []
         for e in entries:
-            marker = ">" if e.pc == pc else " "
+            here = ">" if e.pc == pc else " "
+            bp = "●" if e.pc in self.breakpoints else " "
             hexes = " ".join(f"{b:02X}" for b in e.opcode)
-            rendered.append(f"{marker} {e.pc:04X}  {hexes:<9} {e.mnemonic}")
+            rendered.append(f"{bp}{here} {e.pc:04X}  {hexes:<9} {e.mnemonic}")
+
         self.disasm.setPlainText("\n".join(rendered) or "(no disassembly)")
 
 
