@@ -1,6 +1,6 @@
 #[cfg(feature = "debug")]
 use crate::cpu::{CpuSnapshot, DisasmEntry};
-use crate::{bus::Bus, cart::Cartridge, cpu::Cpu};
+use crate::{bus::Bus, cart::Cartridge, cpu::Cpu, ppu::Ppu};
 #[cfg(feature = "debug")]
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -23,7 +23,7 @@ pub struct Nes {
 impl Nes {
     pub fn new() -> Self {
         Nes {
-            bus: Bus::new(),
+            bus: Bus::new(Ppu::new()),
             cpu: Cpu::new(),
         }
     }

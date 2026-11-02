@@ -128,6 +128,10 @@ impl Cartridge {
     pub fn chr(&self) -> &[u8] {
         &self.chr_rom
     }
+
+    pub fn mirroring(&self) -> Mirroring {
+        self.mirroring
+    }
     /// Dumps a range of CPU addresses mapped to PRG ROM
     /// start_addr and end_addr are CPU addresses (0x8000..0xFFFF)
     pub fn dump_prg_range(&self, start_addr: u16, end_addr: u16) {

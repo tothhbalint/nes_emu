@@ -1,64 +1,82 @@
-use bitflags::bitflags;
+mod bus;
+mod oam;
+mod registers;
 
-/*
-* 7  bit  0
----- ----
-VPHB SINN
-|||| ||||
-|||| ||++- Base nametable address
-|||| ||    (0 = $2000; 1 = $2400; 2 = $2800; 3 = $2C00)
-|||| |+--- VRAM address increment per CPU read/write of PPUDATA
-|||| |     (0: add 1, going across; 1: add 32, going down)
-|||| +---- Sprite pattern table address for 8x8 sprites
-||||       (0: $0000; 1: $1000; ignored in 8x16 mode)
-|||+------ Background pattern table address (0: $0000; 1: $1000)
-||+------- Sprite size (0: 8x8 pixels; 1: 8x16 pixels – see PPU OAM#Byte 1)
-|+-------- PPU master/slave select
-|          (0: read backdrop from EXT pins; 1: output color on EXT pins)
-+--------- Vblank NMI enable (0: off, 1: on)
-*/
+use bus::*;
+use oam::Oam;
+use registers::*;
 
-bitflags! {
-    #[derive(Clone, Copy)]
-    pub struct PPUCTRL: u8 {
-        const NAMETABLE_1 = 1 << 0;
-        const NAMETABLE_2 = 1 << 1;
-        const VRAM_ADDR_INCREMENT = 1 << 2;
-        const SPRITE_PATTERN_ADDRESS = 1 << 3;
-        const BACKGROUND_PATTERN_ADDRESS = 1 << 4;
-        const SPRITE_SIZE = 1 << 5;
-        const MASTER_SLAVE_SELECT = 1 << 6;
-        const NMI_ENABLE = 1 << 7;
-    }
+use crate::cart::Mirroring;
+
+const X_SIZE: usize = 283;
+const Y_SIZE: usize = 242;
+type RenderedImage = [[u8; X_SIZE]; Y_SIZE];
+
+pub struct Ppu {
+    pub regs: Registers,
+    pub oam: Oam,
+    bus: PpuBus,
+    vram: u16,
+    scroll_x: u8,
+    scroll_y: u8,
 }
 
-/*
-* 7  bit  0
----- ----
-BGRs bMmG
-|||| ||||
-|||| |||+- Greyscale (0: normal color, 1: greyscale)
-|||| ||+-- 1: Show background in leftmost 8 pixels of screen, 0: Hide
-|||| |+--- 1: Show sprites in leftmost 8 pixels of screen, 0: Hide
-|||| +---- 1: Enable background rendering
-|||+------ 1: Enable sprite rendering
-||+------- Emphasize red (green on PAL/Dendy)
-|+-------- Emphasize green (red on PAL/Dendy)
-+--------- Emphasize blue
-*/
+impl Ppu {
+    pub fn new() -> Self {
+        Ppu {
+            regs: Registers {
+                ctrl: PPUCTRL::empty(),
+                mask: PPUMASK::empty(),
+                status: PPUSTATUS::empty(),
+                v: 0,
+                t: 0,
+                x: 0,
+                w: false,
+            },
+            bus: PpuBus::new(),
+            oam: Oam::new(),
+            vram: 0,
+            scroll_x: 0,
+            scroll_y: 0,
+        }
+    }
 
-bitflags! {
-    #[derive(Clone, Copy)]
-    pub struct PPUMASK: u8 {
-        const GRAYSCALE = 1 << 0;
-        const SHOW_BACKGROUND = 1 << 1;
-        const SHOW_SPRITES = 1 << 2;
-        const BACKGROUND_RENDERING = 1 << 3;
-        const SPRITE_RENDERING = 1 << 4;
-        const EMPH_RED = 1 << 5;
-        const EMPH_GREEN = 1 << 6;
-        const EMPH_BLUE = 1 << 7;
+    pub fn load_chr(&mut self, chr: &[u8], mirroring: Mirroring) {
+        self.bus.load(chr, mirroring);
+    }
+
+    #[inline]
+    pub fn read_chr(&self, addr: u16) -> u8 {
+        self.bus.read(addr)
+    }
+
+    #[inline]
+    pub fn reg_read(&self, idx: u8) -> u8 {
+        let r = &self.regs;
+        match idx & 0x07 {
+            0 => r.ctrl.bits(),
+            1 => r.mask.bits(),
+            2 => r.status.bits(),
+            3 => self.oam.addr(),
+            4 => self.oam.peek(),
+            5 => r.x,
+            6 => (r.v >> 8) as u8,
+            _ => self.vram as u8,
+        }
+    }
+    #[inline]
+    pub fn reg_write(&mut self, idx: u8, val: u8) {
+        let r = &mut self.regs;
+        match idx & 0x07 {
+            0 => r.write_ctrl(val),
+            1 => r.write_mask(val),
+            3 => self.oam.set_addr(val),
+            4 => self.oam.write(val),
+            _ => self.vram = val as u16,
+        }
+    }
+
+    pub fn render(&self) -> RenderedImage {
+        [[0; X_SIZE]; Y_SIZE]
     }
 }
-
-pub struct Ppu {}
