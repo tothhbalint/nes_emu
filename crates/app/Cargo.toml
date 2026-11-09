@@ -9,6 +9,8 @@ path = "src/main.rs"
 
 [dependencies]
 emulator-core.workspace = true
+pixels = "0.17.2"
+winit = "0.30.13"
 # clap = "4"          # arg parsing
 # sdl2 = { version = "0.37", optional = true }   # windowed mode, later
 

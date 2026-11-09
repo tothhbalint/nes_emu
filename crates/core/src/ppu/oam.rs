@@ -9,10 +9,42 @@ pub(crate) enum SpriteByte {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Sprite {
-    y: u8,
-    tile: u8,
-    attr: u8,
-    x: u8,
+    pub y: u8,
+    pub tile: u8,
+    pub attr: u8,
+    pub x: u8,
+}
+/*
+ * 76543210
+ * ||||||||
+ * ||||||++- Palette (4 to 7) of sprite
+ * |||+++--- Unimplemented (read 0)
+ * ||+------ Priority (0: in front of background; 1: behind background)
+ * |+------- Flip sprite horizontally
+ * +-------- Flip sprite vertically
+ *
+ */
+impl Sprite {
+    pub fn get_palette(&self) -> u8 {
+        self.attr & 0x3
+    }
+
+    pub fn get_priority(&self) -> bool {
+        (self.attr >> 5 & 0x1) == 0
+    }
+
+    pub fn get_horizontal_flip(&self) -> bool {
+        (self.attr >> 6 & 0x1) == 1
+    }
+
+    pub fn get_vertical_flip(&self) -> bool {
+        (self.attr >> 7 & 0x1) == 1
+    }
+
+    pub fn covers_scanline(&self, scanline: u16, height: u8) -> bool {
+        let top = self.y as u16 + 1;
+        scanline >= top && scanline < top + height as u16
+    }
 }
 
 const SPRITE_SIZE: usize = 4;

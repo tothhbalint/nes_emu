@@ -1,6 +1,9 @@
 mod disass;
 mod op;
 
+#[cfg(test)]
+mod tests;
+
 use crate::{bus::Bus, cpu::op::make_op_table};
 use bitflags::bitflags;
 use op::addressing;
@@ -41,6 +44,8 @@ pub struct Cpu {
     //Timing
     cycles_left: u8,
     cycles: u64,
+    //Interrupt
+    nmi_pending: bool,
 }
 
 impl Cpu {
@@ -54,7 +59,23 @@ impl Cpu {
             status: Status::U.union(Status::I),
             cycles: 7,
             cycles_left: 0,
+            nmi_pending: false,
         }
+    }
+
+    pub fn set_nmi(&mut self) {
+        self.nmi_pending = true;
+    }
+
+    fn nmi(&mut self, bus: &mut Bus) {
+        let pc = self.pc;
+        self.push_stack(bus, (pc >> 8) as u8);
+        self.push_stack(bus, (pc & 0xFF) as u8);
+        let status_bits = self.status.clone();
+        self.status.set(Status::B, false);
+        self.push_stack(bus, status_bits.bits());
+        self.pc = self.fetch_word(bus, 0xFFFA);
+        self.cycles_left = 7;
     }
 
     pub fn reset(&mut self, bus: &mut Bus) {
@@ -91,6 +112,7 @@ impl Cpu {
         while self.cycles_left != 0 {
             self.tick(bus);
         }
+
         self.tick(bus);
         while self.cycles_left != 0 {
             self.tick(bus);
@@ -107,6 +129,10 @@ impl Cpu {
         if self.cycles_left != 0 {
             self.cycles += 1;
             self.cycles_left -= 1;
+            return;
+        } else if self.nmi_pending {
+            self.nmi_pending = false;
+            self.nmi(bus);
             return;
         }
 
@@ -130,7 +156,7 @@ impl Cpu {
     }
 
     #[inline]
-    fn fetch_current_op(&self, bus: &mut Bus) -> Decoded {
+    fn fetch_current_op(&mut self, bus: &mut Bus) -> Decoded {
         let opcode = self.fetch_byte(bus, self.pc);
 
         let op = disass::decode_op(opcode as usize);
@@ -147,7 +173,7 @@ impl Cpu {
     }
 
     #[inline]
-    fn decode_addressing(&self, op: Op, bus: &mut Bus) -> (u16, u8, bool) {
+    fn decode_addressing(&mut self, op: Op, bus: &mut Bus) -> (u16, u8, bool) {
         let (operand, offset, page_cross): (u16, u8, bool) = match op.addr_mode {
             addressing::Mode::Accumulator | addressing::Mode::Implied => (0x0000, 1, false),
             addressing::Mode::Immediate | addressing::Mode::Relative => {
@@ -244,7 +270,7 @@ impl Cpu {
     }
 
     #[inline]
-    fn fetch_byte(&self, bus: &Bus, addr: u16) -> u8 {
+    fn fetch_byte(&self, bus: &mut Bus, addr: u16) -> u8 {
         bus.read(addr)
     }
 
@@ -300,7 +326,7 @@ impl Cpu {
         }
     }
 
-    pub fn disassemble_forward(&self, bus: &Bus, len: usize) -> Vec<DisasmEntry> {
+    pub fn disassemble_forward(&self, bus: &mut Bus, len: usize) -> Vec<DisasmEntry> {
         let mut addr = self.pc();
         let mut out: Vec<DisasmEntry> = vec![];
         for _ in 0..len {

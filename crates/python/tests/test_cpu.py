@@ -19,6 +19,7 @@ def test_inst_testv5():
     for path in sorted(folder.iterdir()):
         if path.is_file() and path.suffix.lower() == ".nes":
             n.load(str(path))
+            while
 
 
 if __name__ == "__main__":

@@ -101,7 +101,7 @@ impl Cartridge {
     /// Reads from the cartridge address space ($4020-$FFFF).
     pub fn read(&self, addr: usize) -> u8 {
         match addr {
-            0x6000..=0x7FFF => self.wram[addr - 0x6000],
+            0x6000..=0x7FFF => self.wram[addr & 0x1FFF],
             0x8000..=0xFFFF => self.read_prg(addr),
             _ => 0,
         }
@@ -111,7 +111,7 @@ impl Cartridge {
     /// (and, for now, expansion) are ignored; $6000-$7FFF is cartridge WRAM.
     pub fn write(&mut self, addr: usize, data: u8) {
         if let 0x6000..=0x7FFF = addr {
-            self.wram[addr - 0x6000] = data;
+            self.wram[addr & 0x1FFF] = data;
         }
     }
 

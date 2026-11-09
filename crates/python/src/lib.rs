@@ -38,7 +38,7 @@ impl PyNes {
     }
 
     fn step(&mut self) {
-        self.inner.step();
+        self.inner.tick();
     }
 
     fn snap(&mut self) -> PyCpuSnapshot {

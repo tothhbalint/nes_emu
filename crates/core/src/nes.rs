@@ -1,19 +1,14 @@
 #[cfg(feature = "debug")]
 use crate::cpu::{CpuSnapshot, DisasmEntry};
-use crate::{bus::Bus, cart::Cartridge, cpu::Cpu, ppu::Ppu};
+use crate::{
+    bus::Bus,
+    cart::Cartridge,
+    cpu::Cpu,
+    ppu::{self, Ppu},
+};
 #[cfg(feature = "debug")]
 use std::io::{BufWriter, Write};
 use std::path::Path;
-
-trait Clock {}
-
-struct NesClock {}
-
-impl Clock for NesClock {}
-
-struct PalClock {}
-
-impl Clock for PalClock {}
 
 pub struct Nes {
     bus: Bus,
@@ -28,11 +23,31 @@ impl Nes {
         }
     }
 
-    pub fn step(&mut self) {
-        self.cpu.tick(&mut self.bus);
+    pub fn run_frame(&mut self) {
+        const CPU_CYCLES_PER_FRAME: usize = 29_780;
+        for _ in 0..CPU_CYCLES_PER_FRAME {
+            self.tick();
+        }
+
+        self.bus.ppu.advance_frame();
     }
 
-    pub fn fetch_test_result(&self) -> Vec<u8> {
+    pub fn frame(&self) -> ppu::FrameBuffer {
+        self.bus.ppu.render()
+    }
+
+    pub fn tick(&mut self) {
+        self.bus.ppu.tick();
+        self.bus.ppu.tick();
+        self.bus.ppu.tick();
+        self.cpu.tick(&mut self.bus);
+
+        if self.bus.ppu.take_nmi() {
+            self.cpu.set_nmi();
+        }
+    }
+
+    pub fn fetch_test_result(&mut self) -> Vec<u8> {
         let mut addr: u16 = 0x6004;
         let mut data: Vec<u8> = Vec::new();
 
@@ -73,7 +88,7 @@ impl Nes {
         let mut cycles = 0usize;
 
         loop {
-            self.step();
+            self.tick();
             cycles += 1;
 
             let status = self.bus.read(0x6000);
@@ -178,7 +193,7 @@ impl Nes {
         }
 
         loop {
-            self.step();
+            self.tick();
             let pc = self.cpu.pc();
             if breakpoints.contains(&pc) {
                 return Some(pc);
@@ -199,8 +214,8 @@ impl Nes {
         self.cpu.take_snapshot()
     }
 
-    pub fn disassemble_forward(&self, _start: u16, count: usize) -> Vec<DisasmEntry> {
-        self.cpu.disassemble_forward(&self.bus, count)
+    pub fn disassemble_forward(&mut self, _start: u16, count: usize) -> Vec<DisasmEntry> {
+        self.cpu.disassemble_forward(&mut self.bus, count)
     }
 }
 
@@ -257,7 +272,7 @@ impl Nes {
 
         let mut steps = 0;
         while self.cpu.pc() != 0xC66E && steps < MAX_STEPS {
-            self.step();
+            self.tick();
             steps += 1;
         }
 

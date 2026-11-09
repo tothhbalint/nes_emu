@@ -1,5 +1,7 @@
 use bitflags::bitflags;
 
+use crate::ppu::bus::PpuBus;
+
 /*
 * 7  bit  0
 ---- ----
@@ -29,6 +31,24 @@ bitflags! {
         const SPRITE_SIZE = 1 << 5;
         const MASTER_SLAVE_SELECT = 1 << 6;
         const NMI_ENABLE = 1 << 7;
+    }
+}
+
+impl PPUCTRL {
+    pub fn get_bg_addr(&self) -> u16 {
+        if self.contains(PPUCTRL::BACKGROUND_PATTERN_ADDRESS) {
+            0x1000
+        } else {
+            0x0000
+        }
+    }
+
+    pub fn get_sprite_addr(&self) -> u16 {
+        if self.contains(PPUCTRL::SPRITE_PATTERN_ADDRESS) {
+            0x1000
+        } else {
+            0x0000
+        }
     }
 }
 
@@ -93,7 +113,74 @@ pub struct Registers {
 }
 
 impl Registers {
-    pub fn write_ctrl(&mut self, val: u8) {}
+    pub fn write_ctrl(&mut self, val: u8) {
+        self.ctrl = PPUCTRL::from_bits_retain(val);
 
-    pub fn write_mask(&mut self, val: u8) {}
+        self.t = (self.t & 0xF3FF) | ((val as u16 & 0x03) << 10);
+    }
+
+    pub fn write_mask(&mut self, val: u8) {
+        self.mask = PPUMASK::from_bits_retain(val);
+    }
+
+    pub fn write_status(&mut self, val: u8) {
+        self.status = PPUSTATUS::from_bits_retain(val);
+    }
+    pub fn read_ctrl(&mut self) -> u8 {
+        self.ctrl.bits()
+    }
+
+    pub fn read_mask(&mut self) -> u8 {
+        self.mask.bits()
+    }
+
+    pub fn read_status(&mut self) -> u8 {
+        self.w = false;
+        let state = self.status.bits();
+        self.status.remove(PPUSTATUS::VBLANK);
+
+        state
+    }
+
+    pub fn write_ppuaddr(&mut self, val: u8) {
+        if !self.w {
+            self.t = (self.t & 0x00FF) | ((val as u16 & 0x3F) << 8);
+        } else {
+            self.t = (self.t & 0xFF00) | val as u16;
+            self.v = self.t;
+        }
+        self.w = !self.w;
+    }
+
+    pub fn write_ppuscroll(&mut self, val: u8) {
+        if !self.w {
+            self.t = (self.t & 0x7FE0) | (val as u16 >> 3);
+            self.x = val & 0x07;
+        } else {
+            self.t =
+                (self.t & 0x0C1F) | (((val as u16) & 0x07) << 12) | (((val as u16) & 0xF8) << 2);
+        }
+        self.w = !self.w;
+    }
+
+    fn increment(&self) -> u8 {
+        if self.ctrl.contains(PPUCTRL::VRAM_ADDR_INCREMENT) {
+            32
+        } else {
+            1
+        }
+    }
+
+    pub fn read_ppudata(&mut self, bus: &PpuBus) -> u8 {
+        let data = bus.read(self.v);
+        self.v = self.v.wrapping_add(self.increment() as u16) & 0x7FFF;
+        data
+    }
+
+    pub fn write_ppudata(&mut self, bus: &mut PpuBus, val: u8) {
+        {
+            bus.write(self.v, val);
+            self.v = self.v.wrapping_add(self.increment() as u16) & 0x7FFF;
+        }
+    }
 }

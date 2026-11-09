@@ -5,6 +5,7 @@
 #[cfg(feature = "debug")]
 use super::DisasmEntry;
 
+use super::Bus;
 use super::{op::addressing::Mode, Op, OP_LOOKUP};
 
 pub(super) fn decode_op(opcode: usize) -> Op {
@@ -12,7 +13,7 @@ pub(super) fn decode_op(opcode: usize) -> Op {
 }
 
 #[cfg(feature = "debug")]
-pub(super) fn disass_at_address(bus: &Bus, addr: u16) -> DisasmEntry {
+pub(super) fn disass_at_address(bus: &mut Bus, addr: u16) -> DisasmEntry {
     let opcode = bus.read(addr);
 
     let op = decode_op(opcode as usize);
