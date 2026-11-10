@@ -25,26 +25,34 @@ impl Nes {
 
     pub fn run_frame(&mut self) {
         const CPU_CYCLES_PER_FRAME: usize = 29_780;
-        for _ in 0..CPU_CYCLES_PER_FRAME {
-            self.tick();
+        const PPU_CYCLES_PER_FRAME: usize = 29_780 * 3;
+        for i in 0..PPU_CYCLES_PER_FRAME {
+            self.tick_by_ppu(i as u64);
         }
-
-        self.bus.ppu.advance_frame();
     }
 
     pub fn frame(&self) -> ppu::FrameBuffer {
         self.bus.ppu.render()
     }
 
-    pub fn tick(&mut self) {
+    pub fn tick_by_ppu(&mut self, cycle: u64) {
         self.bus.ppu.tick();
-        self.bus.ppu.tick();
-        self.bus.ppu.tick();
-        self.cpu.tick(&mut self.bus);
-
         if self.bus.ppu.take_nmi() {
             self.cpu.set_nmi();
         }
+        if cycle % 3 == 0 {
+            self.cpu.tick(&mut self.bus);
+        }
+    }
+
+    pub fn tick_by_cpu(&mut self) {
+        self.bus.ppu.tick();
+        self.bus.ppu.tick();
+        self.bus.ppu.tick();
+        if self.bus.ppu.take_nmi() {
+            self.cpu.set_nmi();
+        }
+        self.cpu.tick(&mut self.bus);
     }
 
     pub fn fetch_test_result(&mut self) -> Vec<u8> {
@@ -88,7 +96,7 @@ impl Nes {
         let mut cycles = 0usize;
 
         loop {
-            self.tick();
+            self.tick_by_cpu();
             cycles += 1;
 
             let status = self.bus.read(0x6000);
@@ -193,7 +201,7 @@ impl Nes {
         }
 
         loop {
-            self.tick();
+            self.tick_by_cpu();
             let pc = self.cpu.pc();
             if breakpoints.contains(&pc) {
                 return Some(pc);
@@ -272,7 +280,7 @@ impl Nes {
 
         let mut steps = 0;
         while self.cpu.pc() != 0xC66E && steps < MAX_STEPS {
-            self.tick();
+            self.tick_by_cpu();
             steps += 1;
         }
 

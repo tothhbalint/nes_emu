@@ -75,7 +75,7 @@ impl Cpu {
         self.status.set(Status::B, false);
         self.push_stack(bus, status_bits.bits());
         self.pc = self.fetch_word(bus, 0xFFFA);
-        self.cycles_left = 7;
+        self.cycles_left = 6;
     }
 
     pub fn reset(&mut self, bus: &mut Bus) {
@@ -138,7 +138,7 @@ impl Cpu {
 
         let op = self.fetch_current_op(bus);
 
-        self.cycles_left = op.inst.base_cycles;
+        self.cycles_left = op.inst.base_cycles.saturating_sub(1);
 
         if op.page_cross
             && matches!(
