@@ -25,7 +25,6 @@ pub struct Ppu {
     scroll_x: u8,
     scroll_y: u8,
 
-    frame_count: u64,
     dots: u16,      // (0-341),
     scanlines: u16, // (0-261)
     open_bus: u8,
@@ -43,6 +42,8 @@ impl Ppu {
                 t: 0,
                 x: 0,
                 w: false,
+
+                read_buffer: 0,
             },
             bus: PpuBus::new(),
             oam: Oam::new(),
@@ -50,10 +51,9 @@ impl Ppu {
             nmi_latch: false,
             scroll_x: 0,
             scroll_y: 0,
-            frame_count: 0,
 
             dots: 0,
-            scanlines: 0,
+            scanlines: 261,
             open_bus: 0,
             buffer: [[0; X_SIZE]; Y_SIZE],
         }
@@ -74,29 +74,50 @@ impl Ppu {
 
     pub fn tick(&mut self) {
         self.dots += 1;
-        if self.dots == 341 {
-            self.dots = 0;
-            self.render_scanline();
-            self.scanlines += 1;
-            if self.scanlines == 262 {
-                self.scanlines = 0;
-                self.advance_frame();
-            }
-        }
+
+        let rendering_enabled = self
+            .regs
+            .mask
+            .intersects(PPUMASK::BACKGROUND_RENDERING | PPUMASK::SPRITE_RENDERING);
 
         match (self.scanlines, self.dots) {
+            (0..=239, 1) => self.render_scanline(),
+
             (241, 1) => {
                 self.regs.status.insert(PPUSTATUS::VBLANK);
                 self.sample_nmi_line();
             }
+
             (261, 1) => {
                 self.regs.status.remove(PPUSTATUS::VBLANK);
+                self.regs.status.remove(PPUSTATUS::SPRITE_0);
                 self.sample_nmi_line();
             }
+
+            (0..=239, 256) | (261, 256) if rendering_enabled => {
+                self.y_increment();
+            }
+
+            (0..=239, 257) | (261, 257) if rendering_enabled => {
+                self.regs.v = (self.regs.v & !0x041F) | (self.regs.t & 0x041F);
+            }
+
+            (261, 280..=304) if rendering_enabled => {
+                self.regs.v = (self.regs.v & !0x7BE0) | (self.regs.t & 0x7BE0);
+            }
+
             _ => {}
         }
-    }
 
+        if self.dots == 341 {
+            self.dots = 0;
+            self.scanlines += 1;
+
+            if self.scanlines == 262 {
+                self.scanlines = 0;
+            }
+        }
+    }
     pub fn load_chr(&mut self, chr: &[u8], mirroring: Mirroring) {
         self.bus.load(chr, mirroring);
     }
@@ -115,7 +136,11 @@ impl Ppu {
     pub fn reg_read(&mut self, idx: u8) -> u8 {
         let r = &mut self.regs;
         match idx & 0x07 {
-            2 => r.read_status(),
+            2 => {
+                let value = r.read_status();
+                self.sample_nmi_line();
+                value
+            }
             4 => self.oam.peek(),
             7 => r.read_ppudata(&self.bus),
             _ => self.open_bus,
@@ -140,8 +165,34 @@ impl Ppu {
         }
     }
 
-    pub fn advance_frame(&mut self) {
-        self.frame_count = self.frame_count.wrapping_add(1);
+    fn y_increment(&mut self) {
+        let v = &mut self.regs.v;
+        if *v & 0x7000 != 0x7000 {
+            *v += 0x1000;
+            return;
+        }
+        *v &= !0x7000;
+        let mut y = (*v & 0x03E0) >> 5;
+
+        if y == 29 {
+            y = 0;
+            *v ^= 0x0800;
+        } else if y == 31 {
+            y = 0
+        } else {
+            y += 1;
+        }
+        *v = (*v & !0x03E0) | (y << 5)
+    }
+
+    #[inline]
+    fn inc_coarse_x(&mut self) {
+        if self.regs.v & 0x001F == 0x001F {
+            self.regs.v &= !0x001F;
+            self.regs.v ^= 0x0400;
+        } else {
+            self.regs.v += 1;
+        }
     }
 
     fn render_scanline(&mut self) {
@@ -216,51 +267,73 @@ impl Ppu {
             };
 
             if (buf_y as usize) < Y_SIZE && (buf_x as usize) < X_SIZE {
-                if sprite.get_priority() && self.buffer[buf_y as usize][buf_x as usize] & 0x1 != 0 {
-                    self.buffer[buf_y as usize][buf_x as usize] = value;
-                }
+                self.buffer[buf_y as usize][buf_x as usize] = value;
             }
         }
     }
 
     fn render_background(&mut self) {
+        let backdrop = self.bus.read(0x3F00);
+        self.buffer[self.scanlines as usize].fill(backdrop);
+
         if !self.regs.mask.contains(PPUMASK::BACKGROUND_RENDERING) {
             return;
-        } else {
-            for x in 0..256 {
-                self.buffer[self.scanlines as usize][x] = self.bus.read(0x3F00);
-            }
         }
+
         let pattern_base = self.regs.ctrl.get_bg_addr();
-        let nametable = 0x2000 + (self.regs.ctrl.bits() as u16 & 0x03) * 0x400;
-        let attributes = nametable + 0x03C0;
+        let fine_x = self.regs.x as u16;
+        let y = self.scanlines as u16;
 
-        let y = self.scanlines;
-        let ty = y >> 3;
-        let fine_y = y & 0x7;
+        let mut v = self.regs.v;
 
-        for tx in 0..32u16 {
-            let tile = self.bus.read(nametable + ty * 32 + tx) as u16;
-            let attr = self.bus.read(attributes + (ty >> 2) * 8 + (tx >> 2));
-            let shift = ((ty & 2) << 1) | (tx & 2);
-            let palette_idx = (attr >> shift) & 0x03;
+        for tile_i in 0..=32u16 {
+            let nt_addr = 0x2000 | (v & 0x0FFF);
+            let attr_addr = 0x23C0 | (v & 0x0C00) | ((v >> 4) & 0x38) | ((v >> 2) & 0x07);
 
-            let palette = self.bus.palette_lookup(false, palette_idx);
+            let tile = self.bus.read(nt_addr) as u16;
+            let attr = self.bus.read(attr_addr);
 
+            let shift = ((v >> 4) & 4) | (v & 2);
+
+            let palette = self.bus.palette_lookup(false, (attr >> shift) & 0x03);
+            let fine_y = (v >> 12) & 0x07;
             let base = pattern_base + tile * 16;
 
             let lo = self.bus.read(base + fine_y);
             let hi = self.bus.read(base + fine_y + 8);
-            for fine_x in 0..8u16 {
-                let bit = 7 - fine_x;
-                let colour = (((hi >> bit) & 1) << 1) | ((lo >> bit) & 1);
 
-                let value = palette[colour as usize];
-                let x = tx * 8 + fine_x;
+            if self.scanlines == 0 {
+                if y == 0 && tile_i < 8 {
+                    println!(
+                        "tile_i={} v={:04X} nt={:04X} tile={:02X} pattern={:04X}",
+                        tile_i, v, nt_addr, tile, base
+                    );
+                }
+            }
+            for px in 0..8u16 {
+                let source_x = tile_i * 8 + px;
+                if source_x < fine_x {
+                    continue; // scrolled off
+                }
+                let x = source_x - fine_x;
+                if x >= 256 {
+                    break;
+                }
+                let bit = 7 - px;
+                let colour = (((hi >> bit) & 1) << 1) | ((lo >> bit) & 1);
+                if colour == 0 {
+                    continue;
+                }
                 if x < 8 && !self.regs.mask.contains(PPUMASK::SHOW_BACKGROUND) {
                     continue;
                 };
-                self.buffer[y as usize][x as usize] = value;
+                self.buffer[y as usize][x as usize] = palette[colour as usize];
+            }
+            if v & 0x001F == 0x001F {
+                v &= !0x001F;
+                v ^= 0x0400;
+            } else {
+                v += 1;
             }
         }
     }

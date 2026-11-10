@@ -21,7 +21,7 @@ impl PpuBus {
             chr: [0; CHR_SIZE],
             name_tables: [0; (NAME_TABLE_SIZE + ATTR_TABLE_SIZE) * NAME_ATTR_TABLE_COUNT],
             palette: [0; PALETTE_SIZE],
-            mirroring: Mirroring::Vertical,
+            mirroring: Mirroring::Horizontal,
         }
     }
 
@@ -36,8 +36,8 @@ impl PpuBus {
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
             0x0000..=0x1FFF => self.chr[addr as usize],
-            0x2000..=0x3EFF => self.name_tables[(addr & 0x0FFF) as usize],
-            0x3F00..=0x3FFF => self.palette[(addr & 0x001F) as usize], // TODO check entry
+            0x2000..=0x3EFF => self.name_tables[self.nametable_index(addr)],
+            0x3F00..=0x3FFF => self.palette[Self::palette_slot(addr)],
             _ => 0x0,
         }
     }
@@ -46,8 +46,8 @@ impl PpuBus {
     pub fn write(&mut self, addr: u16, val: u8) {
         match addr {
             0x0000..=0x1FFF => self.chr[addr as usize] = val,
-            0x2000..=0x3EFF => self.name_tables[(addr & 0x0FFF) as usize] = val,
-            0x3F00..=0x3FFF => self.palette[(addr & 0x001F) as usize] = val, // TODO check entry
+            0x2000..=0x3EFF => self.name_tables[self.nametable_index(addr)] = val,
+            0x3F00..=0x3FFF => self.palette[Self::palette_slot(addr)] = val & 0x3F,
             _ => (),
         };
     }
@@ -65,5 +65,26 @@ impl PpuBus {
             self.read(start + 2),
             self.read(start + 3),
         ]
+    }
+
+    #[inline]
+    fn palette_slot(addr: u16) -> usize {
+        let mut i = (addr & 0x001F) as usize;
+        if i & 0x13 == 0x10 {
+            i &= !0x10; // $3F10/$14/$18/$1C -> $3F00/$04/$08/$0C
+        }
+        i
+    }
+
+    #[inline]
+    fn nametable_index(&self, addr: u16) -> usize {
+        let table = ((addr >> 10) & 0x03) as usize;
+        let physical = match self.mirroring {
+            Mirroring::Vertical => table & 0x01, // $2000=$2800, $2400=$2C00
+            Mirroring::Horizontal => table >> 1, // $2000=$2400, $2800=$2C00
+            Mirroring::SingleScreen => 0,
+            Mirroring::FourScreen => table,
+        };
+        physical * 0x400 + (addr as usize & 0x03FF)
     }
 }
