@@ -31,7 +31,7 @@ impl Nes {
         }
     }
 
-    pub fn frame(&self) -> ppu::FrameBuffer {
+    pub fn frame(&self) -> &ppu::FrameBuffer {
         self.bus.ppu.render()
     }
 

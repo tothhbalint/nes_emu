@@ -1,3 +1,5 @@
+use std::default;
+
 use crate::cart::Mirroring;
 
 const NAME_TABLE_SIZE: usize = 0x03C0;
@@ -15,8 +17,8 @@ pub(crate) struct PpuBus {
     mirroring: Mirroring,
 }
 
-impl PpuBus {
-    pub fn new() -> Self {
+impl Default for PpuBus {
+    fn default() -> Self {
         PpuBus {
             chr: [0; CHR_SIZE],
             name_tables: [0; (NAME_TABLE_SIZE + ATTR_TABLE_SIZE) * NAME_ATTR_TABLE_COUNT],
@@ -24,7 +26,9 @@ impl PpuBus {
             mirroring: Mirroring::Horizontal,
         }
     }
+}
 
+impl PpuBus {
     #[inline]
     pub fn load(&mut self, chr_data: &[u8], mirroring: Mirroring) {
         let len = chr_data.len().min(CHR_SIZE);

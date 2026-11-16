@@ -1,29 +1,46 @@
 mod bus;
 mod oam;
+mod palette;
 mod registers;
 
 #[cfg(test)]
 mod tests;
 
 use bus::*;
-use oam::{Oam, Sprite, SpriteByte};
+use oam::Oam;
 use registers::*;
 
-use crate::{cart::Mirroring, ppu::oam::SpriteByte::Attr};
+use crate::cart::Mirroring;
 
 const X_SIZE: usize = 256;
 const Y_SIZE: usize = 240;
 
 pub type FrameBuffer = [[u8; X_SIZE]; Y_SIZE];
 
-pub struct Ppu {
-    pub regs: Registers,
-    pub oam: Oam,
-    bus: PpuBus,
+#[derive(Default)]
+struct Nmi {
     nmi_line: bool,
     nmi_latch: bool,
-    scroll_x: u8,
-    scroll_y: u8,
+}
+
+impl Nmi {
+    pub fn sample_line(&mut self, line: bool) {
+        if line && !self.nmi_line {
+            self.nmi_latch = true;
+        }
+        self.nmi_line = line;
+    }
+
+    pub fn take(&mut self) -> bool {
+        std::mem::replace(&mut self.nmi_latch, false)
+    }
+}
+
+pub struct Ppu {
+    regs: Registers,
+    oam: Oam,
+    bus: PpuBus,
+    nmi: Nmi,
 
     dots: u16,      // (0-341),
     scanlines: u16, // (0-261)
@@ -34,23 +51,10 @@ pub struct Ppu {
 impl Ppu {
     pub fn new() -> Self {
         Ppu {
-            regs: Registers {
-                ctrl: PPUCTRL::empty(),
-                mask: PPUMASK::empty(),
-                status: PPUSTATUS::empty(),
-                v: 0,
-                t: 0,
-                x: 0,
-                w: false,
-
-                read_buffer: 0,
-            },
-            bus: PpuBus::new(),
-            oam: Oam::new(),
-            nmi_line: false,
-            nmi_latch: false,
-            scroll_x: 0,
-            scroll_y: 0,
+            regs: Registers::default(),
+            bus: PpuBus::default(),
+            oam: Oam::default(),
+            nmi: Nmi::default(),
 
             dots: 0,
             scanlines: 261,
@@ -59,17 +63,8 @@ impl Ppu {
         }
     }
 
-    fn sample_nmi_line(&mut self) {
-        let line = self.regs.status.contains(PPUSTATUS::VBLANK)
-            && self.regs.ctrl.contains(PPUCTRL::NMI_ENABLE);
-        if line && !self.nmi_line {
-            self.nmi_latch = true;
-        }
-        self.nmi_line = line;
-    }
-
     pub fn take_nmi(&mut self) -> bool {
-        std::mem::take(&mut self.nmi_latch)
+        self.nmi.take()
     }
 
     pub fn tick(&mut self) {
@@ -81,31 +76,27 @@ impl Ppu {
             .intersects(PPUMASK::BACKGROUND_RENDERING | PPUMASK::SPRITE_RENDERING);
 
         match (self.scanlines, self.dots) {
-            (0..=239, 1) => self.render_scanline(),
+            (0..=239, 1) => render::scanline(
+                &mut self.regs,
+                &self.bus,
+                &self.oam,
+                &mut self.buffer,
+                self.scanlines,
+            ),
 
             (241, 1) => {
-                self.regs.status.insert(PPUSTATUS::VBLANK);
-                self.sample_nmi_line();
+                self.regs.set_vblank();
+                self.nmi.sample_line(self.regs.nmi());
             }
 
             (261, 1) => {
-                self.regs.status.remove(PPUSTATUS::VBLANK);
-                self.regs.status.remove(PPUSTATUS::SPRITE_0);
-                self.sample_nmi_line();
+                self.regs.unset_vblank();
+                self.nmi.sample_line(self.regs.nmi());
             }
 
-            (0..=239, 256) | (261, 256) if rendering_enabled => {
-                self.y_increment();
-            }
-
-            (0..=239, 257) | (261, 257) if rendering_enabled => {
-                self.regs.v = (self.regs.v & !0x041F) | (self.regs.t & 0x041F);
-            }
-
-            (261, 280..=304) if rendering_enabled => {
-                self.regs.v = (self.regs.v & !0x7BE0) | (self.regs.t & 0x7BE0);
-            }
-
+            (0..=239, 256) | (261, 256) if rendering_enabled => self.regs.y_increment(),
+            (0..=239, 257) | (261, 257) if rendering_enabled => self.regs.copy_horizontal(),
+            (261, 280..=304) if rendering_enabled => self.regs.copy_vertical(),
             _ => {}
         }
 
@@ -123,11 +114,6 @@ impl Ppu {
     }
 
     #[inline]
-    pub fn check_nmi(&self) -> bool {
-        self.nmi_latch
-    }
-
-    #[inline]
     pub fn read_chr(&self, addr: u16) -> u8 {
         self.bus.read(addr)
     }
@@ -138,7 +124,7 @@ impl Ppu {
         match idx & 0x07 {
             2 => {
                 let value = r.read_status();
-                self.sample_nmi_line();
+                self.nmi.sample_line(self.regs.nmi());
                 value
             }
             4 => self.oam.peek(),
@@ -153,192 +139,60 @@ impl Ppu {
         match idx & 0x07 {
             0 => {
                 r.write_ctrl(val);
-                self.sample_nmi_line();
+                self.nmi.sample_line(self.regs.nmi());
             }
             1 => r.write_mask(val),
             3 => self.oam.set_addr(val),
             4 => self.oam.write(val),
-            5 => r.write_ppuscroll(val),
-            6 => r.write_ppuaddr(val),
+            5 => r.write_scroll(val),
+            6 => r.write_addr(val),
             7 => r.write_ppudata(&mut self.bus, val),
             _ => {}
         }
     }
 
-    fn y_increment(&mut self) {
-        let v = &mut self.regs.v;
-        if *v & 0x7000 != 0x7000 {
-            *v += 0x1000;
+    pub fn render(&self) -> &FrameBuffer {
+        &self.buffer
+    }
+}
+
+mod render {
+    use crate::ppu::{
+        bus::PpuBus,
+        oam::Oam,
+        registers::{Registers, PPUCTRL, PPUSTATUS},
+        FrameBuffer,
+    };
+
+    mod background;
+    mod sprites;
+
+    pub fn scanline(
+        regs: &mut Registers,
+        bus: &PpuBus,
+        oam: &Oam,
+        framebuffer: &mut FrameBuffer,
+        scanline: u16,
+    ) {
+        if scanline > 240 {
             return;
         }
-        *v &= !0x7000;
-        let mut y = (*v & 0x03E0) >> 5;
 
-        if y == 29 {
-            y = 0;
-            *v ^= 0x0800;
-        } else if y == 31 {
-            y = 0
-        } else {
-            y += 1;
-        }
-        *v = (*v & !0x03E0) | (y << 5)
-    }
-
-    #[inline]
-    fn inc_coarse_x(&mut self) {
-        if self.regs.v & 0x001F == 0x001F {
-            self.regs.v &= !0x001F;
-            self.regs.v ^= 0x0400;
-        } else {
-            self.regs.v += 1;
-        }
-    }
-
-    fn render_scanline(&mut self) {
-        match self.scanlines {
-            0..240 => {
-                let height = if self.regs.ctrl.contains(PPUCTRL::SPRITE_SIZE) {
-                    16
-                } else {
-                    8
-                };
-
-                let sprite_buffer: Vec<Sprite> = (0..64usize)
-                    .map(|i| self.oam.get_sprite(i))
-                    .filter(|s| s.covers_scanline(self.scanlines, height))
-                    .take(8)
-                    .collect();
-
-                self.render_background();
-
-                sprite_buffer
-                    .iter()
-                    .rev()
-                    .for_each(|s| self.render_sprite(s));
-            }
-            _ => {}
-        }
-    }
-
-    fn render_sprite(&mut self, sprite: &Sprite) {
-        let top = sprite.y as u16 + 1;
-        let mut row = (self.scanlines - top) as u16;
-
-        let height = if self.regs.ctrl.contains(PPUCTRL::SPRITE_SIZE) {
+        let height = if regs.ctrl.contains(PPUCTRL::SPRITE_SIZE) {
             16
         } else {
             8
         };
 
-        if sprite.get_vertical_flip() {
-            row = height as u16 - 1 - row;
-        }
-        let pallete_idx = sprite.get_palette();
+        let (mask, overflow) = oam.select(scanline, height);
+        let sprites = oam.sprites();
 
-        let palette = self.bus.palette_lookup(true, pallete_idx);
+        background::render(regs, scanline, bus, framebuffer);
 
-        let bank: u16 = self.regs.ctrl.get_sprite_addr();
-        let base = (bank + (sprite.tile as u16 * 16)) as u16;
-
-        let mut upper = self.bus.read(base + row);
-        let mut lower = self.bus.read(base + row + 8);
-
-        let buf_y = self.scanlines;
-        for x in (0..=7).rev() {
-            let buf_x = if sprite.get_horizontal_flip() {
-                sprite.x + 7 - x
-            } else {
-                sprite.x + x
-            };
-
-            let color = (1 & lower) << 1 | (1 & upper);
-            upper = upper >> 1;
-            lower = lower >> 1;
-
-            if color == 0 {
-                continue;
-            }
-
-            let value = palette[color as usize];
-
-            if buf_x < 8 && !self.regs.mask.contains(PPUMASK::SHOW_SPRITES) {
-                continue;
-            };
-
-            if (buf_y as usize) < Y_SIZE && (buf_x as usize) < X_SIZE {
-                self.buffer[buf_y as usize][buf_x as usize] = value;
-            }
-        }
-    }
-
-    fn render_background(&mut self) {
-        let backdrop = self.bus.read(0x3F00);
-        self.buffer[self.scanlines as usize].fill(backdrop);
-
-        if !self.regs.mask.contains(PPUMASK::BACKGROUND_RENDERING) {
-            return;
-        }
-
-        let pattern_base = self.regs.ctrl.get_bg_addr();
-        let fine_x = self.regs.x as u16;
-        let y = self.scanlines as u16;
-
-        let mut v = self.regs.v;
-
-        for tile_i in 0..=32u16 {
-            let nt_addr = 0x2000 | (v & 0x0FFF);
-            let attr_addr = 0x23C0 | (v & 0x0C00) | ((v >> 4) & 0x38) | ((v >> 2) & 0x07);
-
-            let tile = self.bus.read(nt_addr) as u16;
-            let attr = self.bus.read(attr_addr);
-
-            let shift = ((v >> 4) & 4) | (v & 2);
-
-            let palette = self.bus.palette_lookup(false, (attr >> shift) & 0x03);
-            let fine_y = (v >> 12) & 0x07;
-            let base = pattern_base + tile * 16;
-
-            let lo = self.bus.read(base + fine_y);
-            let hi = self.bus.read(base + fine_y + 8);
-
-            if self.scanlines == 0 {
-                if y == 0 && tile_i < 8 {
-                    println!(
-                        "tile_i={} v={:04X} nt={:04X} tile={:02X} pattern={:04X}",
-                        tile_i, v, nt_addr, tile, base
-                    );
-                }
-            }
-            for px in 0..8u16 {
-                let source_x = tile_i * 8 + px;
-                if source_x < fine_x {
-                    continue; // scrolled off
-                }
-                let x = source_x - fine_x;
-                if x >= 256 {
-                    break;
-                }
-                let bit = 7 - px;
-                let colour = (((hi >> bit) & 1) << 1) | ((lo >> bit) & 1);
-                if colour == 0 {
-                    continue;
-                }
-                if x < 8 && !self.regs.mask.contains(PPUMASK::SHOW_BACKGROUND) {
-                    continue;
-                };
-                self.buffer[y as usize][x as usize] = palette[colour as usize];
-            }
-            if v & 0x001F == 0x001F {
-                v &= !0x001F;
-                v ^= 0x0400;
-            } else {
-                v += 1;
-            }
-        }
-    }
-
-    pub fn render(&self) -> FrameBuffer {
-        self.buffer
+        // Sprite 0 hit check
+        regs.status.set(
+            PPUSTATUS::SPRITE_0,
+            sprites::render(sprites, mask, regs, bus, framebuffer, scanline, height),
+        );
     }
 }

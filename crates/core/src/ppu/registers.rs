@@ -21,7 +21,7 @@ VPHB SINN
 */
 
 bitflags! {
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy,Default)]
     pub struct PPUCTRL: u8 {
         const NAMETABLE_1 = 1 << 0;
         const NAMETABLE_2 = 1 << 1;
@@ -68,7 +68,7 @@ BGRs bMmG
 */
 
 bitflags! {
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy,Default)]
     pub struct PPUMASK: u8 {
         const GRAYSCALE = 1 << 0;
         const SHOW_BACKGROUND = 1 << 1;
@@ -93,7 +93,7 @@ VSOx xxxx
 
 */
 bitflags! {
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy,Default)]
     pub struct PPUSTATUS: u8 {
         const SPRITE_OVERFLOW = 1 << 5;
         const SPRITE_0 = 1 << 6;
@@ -101,6 +101,7 @@ bitflags! {
     }
 }
 
+#[derive(Default)]
 pub struct Registers {
     pub ctrl: PPUCTRL,
     pub mask: PPUMASK,
@@ -112,21 +113,6 @@ pub struct Registers {
     pub w: bool, // $2005/2006 write toggle
 
     pub read_buffer: u8,
-}
-
-impl Default for Registers {
-    fn default() -> Self {
-        Registers {
-            ctrl: PPUCTRL::empty(),
-            mask: PPUMASK::empty(),
-            status: PPUSTATUS::empty(),
-            v: 0,
-            t: 0,
-            x: 0,
-            w: false,
-            read_buffer: 0,
-        }
-    }
 }
 
 impl Registers {
@@ -151,6 +137,10 @@ impl Registers {
         self.mask.bits()
     }
 
+    pub fn nmi(&self) -> bool {
+        self.status.contains(PPUSTATUS::VBLANK) && self.ctrl.contains(PPUCTRL::NMI_ENABLE)
+    }
+
     pub fn read_status(&mut self) -> u8 {
         self.w = false;
         let state = self.status.bits();
@@ -159,7 +149,7 @@ impl Registers {
         state
     }
 
-    pub fn write_ppuaddr(&mut self, val: u8) {
+    pub fn write_addr(&mut self, val: u8) {
         if !self.w {
             self.t = (self.t & 0x00FF) | ((val as u16 & 0x3F) << 8);
         } else {
@@ -169,7 +159,7 @@ impl Registers {
         self.w = !self.w;
     }
 
-    pub fn write_ppuscroll(&mut self, val: u8) {
+    pub fn write_scroll(&mut self, val: u8) {
         if !self.w {
             self.t = (self.t & 0x7FE0) | (val as u16 >> 3);
             self.x = val & 0x07;
@@ -212,7 +202,24 @@ impl Registers {
         }
     }
 
-    fn y_increment(&mut self) {
+    pub fn copy_horizontal(&mut self) {
+        self.v = (self.v & !0x041F) | (self.t & 0x041F);
+    }
+
+    pub fn copy_vertical(&mut self) {
+        self.v = (self.v & !0x7BE0) | (self.t & 0x7BE0);
+    }
+
+    pub fn set_vblank(&mut self) {
+        self.status.insert(PPUSTATUS::VBLANK);
+    }
+
+    pub fn unset_vblank(&mut self) {
+        self.status.remove(PPUSTATUS::VBLANK);
+        self.status.remove(PPUSTATUS::SPRITE_0);
+    }
+
+    pub fn y_increment(&mut self) {
         let v = &mut self.v;
         if *v & 0x7000 != 0x7000 {
             *v += 0x1000;
@@ -318,7 +325,7 @@ mod tests {
     fn read_status_resets_write_toggle() {
         let mut regs = Registers::default();
 
-        regs.write_ppuscroll(0x12);
+        regs.write_scroll(0x12);
         assert!(regs.w);
 
         regs.read_status();
@@ -346,7 +353,7 @@ mod tests {
     fn ppuaddr_first_write_sets_high_byte() {
         let mut regs = Registers::default();
 
-        regs.write_ppuaddr(0x23);
+        regs.write_addr(0x23);
 
         assert_eq!(regs.t & 0x7F00, 0x2300);
         assert!(regs.w);
@@ -356,7 +363,7 @@ mod tests {
     fn ppuaddr_first_write_masks_to_six_bits() {
         let mut regs = Registers::default();
 
-        regs.write_ppuaddr(0xFF);
+        regs.write_addr(0xFF);
 
         assert_eq!(regs.t & 0x7F00, 0x3F00);
     }
@@ -365,8 +372,8 @@ mod tests {
     fn ppuaddr_second_write_sets_low_byte() {
         let mut regs = Registers::default();
 
-        regs.write_ppuaddr(0x23);
-        regs.write_ppuaddr(0x45);
+        regs.write_addr(0x23);
+        regs.write_addr(0x45);
 
         assert_eq!(regs.v, 0x2345);
         assert_eq!(regs.t, 0x2345);
@@ -376,8 +383,8 @@ mod tests {
     fn ppuaddr_second_write_resets_toggle() {
         let mut regs = Registers::default();
 
-        regs.write_ppuaddr(0x23);
-        regs.write_ppuaddr(0x45);
+        regs.write_addr(0x23);
+        regs.write_addr(0x45);
 
         assert!(!regs.w);
     }
@@ -387,7 +394,7 @@ mod tests {
         let mut regs = Registers::default();
         regs.t = 0x0045;
 
-        regs.write_ppuaddr(0x23);
+        regs.write_addr(0x23);
 
         assert_eq!(regs.t, 0x2345);
     }
@@ -400,7 +407,7 @@ mod tests {
     fn scroll_first_write_sets_coarse_x() {
         let mut regs = Registers::default();
 
-        regs.write_ppuscroll(0b0010_1011);
+        regs.write_scroll(0b0010_1011);
 
         assert_eq!(regs.t & 0x001F, 5);
     }
@@ -409,7 +416,7 @@ mod tests {
     fn scroll_first_write_sets_fine_x() {
         let mut regs = Registers::default();
 
-        regs.write_ppuscroll(0b0010_1011);
+        regs.write_scroll(0b0010_1011);
 
         assert_eq!(regs.x, 3);
     }
@@ -418,7 +425,7 @@ mod tests {
     fn scroll_first_write_sets_toggle() {
         let mut regs = Registers::default();
 
-        regs.write_ppuscroll(0x00);
+        regs.write_scroll(0x00);
 
         assert!(regs.w);
     }
@@ -427,8 +434,8 @@ mod tests {
     fn scroll_second_write_sets_coarse_y() {
         let mut regs = Registers::default();
 
-        regs.write_ppuscroll(0x00);
-        regs.write_ppuscroll(0b1010_1011);
+        regs.write_scroll(0x00);
+        regs.write_scroll(0b1010_1011);
 
         assert_eq!((regs.t >> 5) & 0x1F, 21);
     }
@@ -437,8 +444,8 @@ mod tests {
     fn scroll_second_write_sets_fine_y() {
         let mut regs = Registers::default();
 
-        regs.write_ppuscroll(0x00);
-        regs.write_ppuscroll(0b0000_0110);
+        regs.write_scroll(0x00);
+        regs.write_scroll(0b0000_0110);
 
         assert_eq!((regs.t >> 12) & 0x07, 6);
     }
@@ -447,8 +454,8 @@ mod tests {
     fn scroll_second_write_resets_toggle() {
         let mut regs = Registers::default();
 
-        regs.write_ppuscroll(0x00);
-        regs.write_ppuscroll(0x00);
+        regs.write_scroll(0x00);
+        regs.write_scroll(0x00);
 
         assert!(!regs.w);
     }

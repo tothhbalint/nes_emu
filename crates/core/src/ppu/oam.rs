@@ -7,13 +7,36 @@ pub(crate) enum SpriteByte {
     X = 3,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) struct Sprite {
     pub y: u8,
     pub tile: u8,
     pub attr: u8,
     pub x: u8,
 }
+
+impl Sprite {
+    pub fn byte(&self, index: u8) -> u8 {
+        match index {
+            0 => self.y,
+            1 => self.tile,
+            2 => self.attr,
+            3 => self.x,
+            _ => panic!(),
+        }
+    }
+
+    pub fn set_byte(&mut self, index: u8, val: u8) {
+        match index {
+            0 => self.y = val,
+            1 => self.tile = val,
+            2 => self.attr = val,
+            3 => self.x = val,
+            _ => panic!(),
+        }
+    }
+}
+
 /*
  * 76543210
  * ||||||||
@@ -48,22 +71,24 @@ impl Sprite {
 }
 
 const SPRITE_SIZE: usize = 4;
-const SPRITE_COUNT: usize = 64;
+pub(crate) const SPRITE_COUNT: usize = 64;
 const OAM_SIZE: usize = SPRITE_COUNT * SPRITE_SIZE;
 
 pub struct Oam {
-    pub addr: u8,
-    pub data: [u8; OAM_SIZE],
+    addr: u8,
+    data: [Sprite; SPRITE_COUNT],
+}
+
+impl Default for Oam {
+    fn default() -> Self {
+        Oam {
+            addr: 0,
+            data: [Sprite::default(); SPRITE_COUNT],
+        }
+    }
 }
 
 impl Oam {
-    pub const fn new() -> Self {
-        Oam {
-            addr: 0,
-            data: [0; OAM_SIZE],
-        }
-    }
-
     #[inline]
     pub fn addr(&self) -> u8 {
         self.addr
@@ -76,24 +101,43 @@ impl Oam {
 
     #[inline]
     pub fn peek(&self) -> u8 {
-        self.data[self.addr as usize]
+        self.data[(self.addr >> 2) as usize].byte(self.addr & 0x3)
     }
 
     #[inline]
     pub fn write(&mut self, val: u8) {
-        self.data[self.addr as usize] = val;
+        self.data[(self.addr >> 2) as usize].set_byte(self.addr & 0x3, val);
         self.addr = self.addr.wrapping_add(1);
     }
 
     #[inline]
-    pub fn get_sprite(&self, index: usize) -> Sprite {
-        let base = (index & (SPRITE_COUNT - 1)) * SPRITE_SIZE;
+    pub fn sprites(&self) -> &[Sprite; SPRITE_COUNT] {
+        &self.data
+    }
 
-        Sprite {
-            y: (self.data[base + SpriteByte::Y as usize]),
-            tile: (self.data[base + SpriteByte::Tile as usize]),
-            attr: (self.data[base + SpriteByte::Attr as usize]),
-            x: (self.data[base + SpriteByte::X as usize]),
+    #[inline]
+    pub fn get_sprite(&self, index: usize) -> Sprite {
+        self.data[index]
+    }
+
+    pub fn select(&self, scanline: u16, height: u8) -> (u64, bool) {
+        let mut selected: u64 = 0;
+        let mut count: u8 = 0;
+        let mut overflow = false;
+
+        for (i, sprite) in self.data.iter().enumerate() {
+            if !sprite.covers_scanline(scanline, height) {
+                continue;
+            }
+
+            if count < 8 {
+                selected |= 1u64 << i;
+                count += 1;
+            } else {
+                overflow = true;
+                break;
+            }
         }
+        (selected, overflow)
     }
 }

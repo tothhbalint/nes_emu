@@ -38,11 +38,11 @@ impl Bus {
             0x2000..=0x3FFF => {
                 self.ppu.reg_write((addr & 0x7) as u8, data);
             }
-            0x4000..0x4014 => {}
             0x4014 => {
                 self.oamdma(data);
             }
-            0x4014..=0x4017 => {} // APU I/O registers
+            0x4000..=0x4013 => {}
+            0x4015..=0x4017 => {} // APU I/O registers
             0x4018..=0x401F => {} // CPU Test mode APU I/O
             // Expansion ($4020-$5FFF) + cartridge space ($6000-$FFFF)
             0x4020..=0xFFFF => match &mut self.cart {
@@ -67,6 +67,7 @@ impl Bus {
         match addr {
             0x0000..=0x1FFF => self.ram[addr as usize & 0x7FF], // RAM (mirrored)
             0x2000..=0x3FFF => self.ppu.reg_read((addr & 0x7) as u8),
+            0x4016 => 0x40,
             0x4000..=0x401F => 0x0, // APU/I-O
             0x4020..=0xFFFF => match &self.cart {
                 Some(cart) => cart.read(addr as usize),
