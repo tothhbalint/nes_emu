@@ -5,7 +5,7 @@
 #[cfg(feature = "debug")]
 use super::DisasmEntry;
 
-use super::{op::addressing::Mode, Op, OP_LOOKUP};
+use super::{op::addressing::Mode, Bus, Op, OP_LOOKUP};
 
 pub(super) fn decode_op(opcode: usize) -> Op {
     OP_LOOKUP[opcode]
